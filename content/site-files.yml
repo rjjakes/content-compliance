@@ -1,0 +1,7 @@
+# Files that exist on the fictional site. The "links work" rule checks links against these and the page paths.
+# Two leaflet files exist, and nothing says which one is current (demo case 3).
+files:
+  - /files/example-medicine-a-leaflet.pdf
+  - /files/example-medicine-a-leaflet-v2.pdf
+  - images/support-programme-steps.png
+  - images/open-day-2024.jpg
