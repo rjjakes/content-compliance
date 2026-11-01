@@ -155,11 +155,10 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
         outcome: z.enum(["migrate", "retire", "redirect"]),
         reason: z.string().min(1).describe("Why, in a sentence or two, in plain English for the editor."),
         target: z.number().int().optional().describe("For a redirect only: the number of the page to redirect to."),
-        model: z.string().optional().describe("The AI model making the recommendation, for the audit trail."),
       }),
       outputSchema: z.object({ page: z.number(), outcome: Outcome, status: z.string() }),
     },
-    async ({ page: id, outcome, reason, target, model }): Promise<CallToolResult> => {
+    async ({ page: id, outcome, reason, target }): Promise<CallToolResult> => {
       if (!pages.some((p) => p.meta.id === id)) return notInBatch(id);
       const saved = await getCopyPage(db, editor, id);
       if (!saved) return error("The batch isn't open yet. Call open_batch first.");
@@ -173,7 +172,7 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
       }
 
       const recommended = { outcome, ...(target ? { target } : {}), reason };
-      const status = STATUS_LABELS[await recordOutcome(db, editor, id, recommended, model)];
+      const status = STATUS_LABELS[await recordOutcome(db, editor, id, recommended)];
       return {
         content: [{ type: "text", text: `Stored for page ${id}: ${outcomeText(recommended)}. Its status is now "${status}".` }],
         structuredContent: { page: id, outcome: recommended, status },

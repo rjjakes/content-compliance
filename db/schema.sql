@@ -62,7 +62,6 @@ CREATE TABLE proposals (
     original_text  text,
     proposed_text  text,
     reason         text,
-    model          text, -- which AI model; null for a scripted example
     scripted       boolean NOT NULL DEFAULT false, -- a labelled example response
     proposed_at    timestamptz NOT NULL DEFAULT now(),
     FOREIGN KEY (copy_id, page_id) REFERENCES copy_pages (copy_id, page_id),

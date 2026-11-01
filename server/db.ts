@@ -118,7 +118,6 @@ export async function recordOutcome(
   externalId: string,
   pageId: number,
   { outcome, target, reason }: z.infer<typeof Outcome>,
-  model?: string,
 ): Promise<string> {
   const status = { migrate: "candidate", retire: "recommend_retire", redirect: "recommend_redirect" }[outcome];
   await db.query(
@@ -129,13 +128,13 @@ export async function recordOutcome(
        WHERE e.external_id = $1 AND cp.page_id = $2
      ),
      proposal AS (
-       INSERT INTO proposals (copy_id, page_id, kind, outcome, target_page_id, reason, model)
-       SELECT copy_id, page_id, 'outcome', $3, $4, $5, $6 FROM copy_page
+       INSERT INTO proposals (copy_id, page_id, kind, outcome, target_page_id, reason)
+       SELECT copy_id, page_id, 'outcome', $3, $4, $5 FROM copy_page
        RETURNING copy_id, page_id
      )
-     UPDATE copy_pages cp SET status = $7, updated_at = now()
+     UPDATE copy_pages cp SET status = $6, updated_at = now()
      FROM proposal WHERE cp.copy_id = proposal.copy_id AND cp.page_id = proposal.page_id`,
-    [externalId, pageId, outcome, target ?? null, reason, model ?? null, status],
+    [externalId, pageId, outcome, target ?? null, reason, status],
   );
   return status;
 }
