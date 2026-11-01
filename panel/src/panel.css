@@ -144,14 +144,25 @@ h3 {
   border-radius: var(--border-radius-md);
   text-decoration: none;
   white-space: pre-wrap;
-}
-
-.change del {
-  background: var(--color-background-danger);
+  background: var(--color-background-secondary);
 }
 
 .change ins {
   margin-top: 4px;
+}
+
+/* Only the words that differ are tinted. */
+.change mark {
+  color: inherit;
+  border-radius: 2px;
+}
+
+.change mark.removed {
+  background: var(--color-background-danger);
+  text-decoration: line-through;
+}
+
+.change mark.added {
   background: var(--color-background-success);
 }
 

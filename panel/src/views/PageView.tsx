@@ -1,6 +1,7 @@
 // The review pane's page view (docs/spec.md, "The editor's view of a page"): what must be fixed with the AI's fixes,
 // the AI's suggestions, the page text and the outcome. The editor accepts or rejects each change, saves, and decides.
 import type { App } from "@modelcontextprotocol/ext-apps";
+import { diffWords } from "diff";
 import { useState } from "react";
 import type { Change, Decision, Outcome, PageDetail } from "../types";
 import { usePage } from "../usePage";
@@ -10,13 +11,28 @@ const outcomeLabel = (o: Outcome) =>
 
 type Decide = (decision: Decision) => void;
 
-/** One of the AI's changes, as the passage before and after, with Accept and Reject until the editor decides. */
+/** The passage before and after a change, with only the words that differ marked. */
+function WordDiff({ before, after }: { before: string; after: string }) {
+  const parts = diffWords(before, after);
+  // The "before" side leaves out added words; the "after" side leaves out removed ones.
+  const side = (marked: "removed" | "added") =>
+    parts
+      .filter((p) => !(marked === "removed" ? p.added : p.removed))
+      .map((p, i) => (p[marked] ? <mark key={i} className={marked}>{p.value}</mark> : <span key={i}>{p.value}</span>));
+  return (
+    <>
+      <del>{side("removed")}</del>
+      <ins>{side("added")}</ins>
+    </>
+  );
+}
+
+/** One of the AI's changes as a diff, with Accept and Reject until the editor decides. */
 function ChangeView({ change, decide, open }: { change: Change; decide: Decide; open: boolean }) {
   const [note, setNote] = useState("");
   return (
     <div className="change">
-      <del>{change.original}</del>
-      <ins>{change.proposed}</ins>
+      <WordDiff before={change.original ?? ""} after={change.proposed ?? ""} />
       {change.reason && <p className="muted">{change.reason}</p>}
       {change.decision ? (
         <p className="muted">{change.decision === "accept" ? "Accepted" : "Rejected"}</p>
