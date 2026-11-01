@@ -38,7 +38,7 @@ test("open_batch: opens the editor's copy of the batch with every page a candida
 
 test("check_page: changed text is checked against the page as imported", async () => {
   const body = loadPages().find((p) => p.meta.id === 1)!.body;
-  const { structured } = await call("check_page", { page: 1, text: body.replace("Take one tablet once a day.", "Take two tablets once a day.") });
+  const { structured } = await call("check_text", { page: 1, text: body.replace("Take one tablet once a day.", "Take two tablets once a day.") });
   assert.deepEqual(structured.failures.map((f: { ruleId: string }) => f.ruleId), ["protected-wording-unchanged"]);
 });
 

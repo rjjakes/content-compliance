@@ -139,19 +139,23 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
     contents: [{ uri: PANEL_URI, mimeType: RESOURCE_MIME_TYPE, text: await panelHtml(), _meta: { ui } }],
   }));
 
+  /** One line per rule failure, after a heading for the page. */
+  const failureLines = (page: CopyPageDetail, { rulesChecked, failures }: Awaited<ReturnType<typeof check>>) => {
+    const heading = `Page ${page.id}, ${page.type}, ${page.title}:`;
+    if (!failures.length) return [`${heading} all ${rulesChecked} rules pass.`];
+    return [`${heading} ${failures.length} of ${rulesChecked} rules fail.`, ...failures.map((f) => `- ${f.name}: ${f.reason}`)];
+  };
+
   server.registerTool(
     "check_page",
     {
       title: "Check page",
       description:
-        "Runs the fixed rules on a page in the batch and returns each failure with its reason. " +
+        "Runs the fixed rules on a page as the editor's copy holds it, and returns each failure with its reason. " +
         "Also says if the page's text is identical to another page in the batch: a fact for triage, not a failure. " +
-        "Give text to check a changed version of the page against the same rules. " +
-        "Without text, it checks the page as the editor's copy holds it, and the results go into the audit trail.",
-      inputSchema: z.object({
-        page: PAGE_NUMBER,
-        text: z.string().optional().describe("The page's text after changes, in Markdown. Leave it out to check the page as it is now."),
-      }),
+        "The results go into the audit trail, so call it once per page when preparing the batch for review. " +
+        "To try out changed text, use check_text.",
+      inputSchema: z.object({ page: PAGE_NUMBER }),
       outputSchema: z.object({
         page: z.number(),
         title: z.string(),
@@ -160,23 +164,44 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
         duplicateOf: z.array(z.number()),
       }),
     },
-    async ({ page: id, text }): Promise<CallToolResult> => {
+    async ({ page: id }): Promise<CallToolResult> => {
       const page = await getCopyPage(db, editor, id);
       if (!page) return notOpen(id);
-      const body = text ?? page.body;
-      const { checks, rulesChecked, failures } = await check(page, body);
-      if (text === undefined) await logPageChecks(db, editor, id, checks, RULES_VERSION);
-      const duplicateOf = await findDuplicates(db, id, body);
-      const heading = `Page ${id}, ${page.type}, ${page.title}:`;
-      const summary = failures.length
-        ? [`${heading} ${failures.length} of ${rulesChecked} rules fail.`, ...failures.map((f) => `- ${f.name}: ${f.reason}`)]
-        : [`${heading} all ${rulesChecked} rules pass.`];
+      const result = await check(page, page.body);
+      await logPageChecks(db, editor, id, result.checks, RULES_VERSION);
+      const duplicateOf = await findDuplicates(db, id, page.body);
+      const summary = failureLines(page, result);
       if (duplicateOf.length) {
         summary.push(`Its text is identical to page ${duplicateOf.join(" and page ")}. This is a fact for triage, not a failure.`);
       }
       return {
         content: [{ type: "text", text: summary.join("\n") }],
-        structuredContent: { page: id, title: page.title, rulesChecked, failures, duplicateOf },
+        structuredContent: { page: id, title: page.title, rulesChecked: result.rulesChecked, failures: result.failures, duplicateOf },
+      };
+    },
+  );
+
+  server.registerTool(
+    "check_text",
+    {
+      title: "Check text",
+      description:
+        "Runs the fixed rules on changed text for a page in the batch, and returns each failure with its reason. " +
+        "Nothing is stored: use it to try out a fix or a rewrite before proposing it.",
+      inputSchema: z.object({
+        page: PAGE_NUMBER,
+        text: z.string().describe("The page's text after changes, in Markdown."),
+      }),
+      outputSchema: z.object({ page: z.number(), title: z.string(), rulesChecked: z.number(), failures: z.array(Failure) }),
+      annotations: { readOnlyHint: true },
+    },
+    async ({ page: id, text }): Promise<CallToolResult> => {
+      const page = await getCopyPage(db, editor, id);
+      if (!page) return notOpen(id);
+      const result = await check(page, text);
+      return {
+        content: [{ type: "text", text: failureLines(page, result).join("\n") }],
+        structuredContent: { page: id, title: page.title, rulesChecked: result.rulesChecked, failures: result.failures },
       };
     },
   );
