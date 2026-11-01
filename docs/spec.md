@@ -89,7 +89,8 @@ A small secondary option lets the editor paste their own text. The rules check i
 ## Tools (proposed)
 Only one tool opens the panel. The AI's tools have no panel of their own. The panel's tools are hidden from the AI.
 - `open_batch`: opens the panel on the batch, and numbers this copy of the panel.
-- `check_page` (AI and panel): runs the fixed rules on a page and returns failures with reasons. It also runs the duplicate check: whether the page's text is identical to another page in the batch.
+- `check_page` (AI): runs the fixed rules on a page as the editor's copy holds it and returns failures with reasons. It also runs the duplicate check: whether the page's text is identical to another page in the batch. The results go into the audit trail.
+- `check_text` (AI and panel): runs the fixed rules on changed text for a page and returns failures with reasons. Nothing is stored. The AI uses it to try a fix before proposing it; the panel uses it for "Check your own text".
 - `recommend_outcome` (AI): takes the AI's migrate, retire or redirect recommendation and its reason, confirms a redirect target exists, and stores it.
 - `propose_fixes` (AI): takes the AI's fixes, its reasons for any failure it can't fix, and its rewrites. It checks each change against the rules and stores it with its results; the editor sees only the changes that pass. Each failure gets two tries. Refuses changes to a page recommended for retire or redirect. Its description gives the AI the guidelines in `config/guidelines.yml`.
 - `get_progress` (panel): returns each page's status and recommended outcome, and what the AI is working on.
