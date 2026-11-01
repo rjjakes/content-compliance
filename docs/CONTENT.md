@@ -58,7 +58,7 @@ For content uplift: bringing each page up to date and in line with the standards
 - Written for the page's audience: plain English for patients, clinical terms allowed on pages for healthcare professionals.
 
 ## Demo cases
-Ten pages, in `content/pages/`. Each one shows a route through the workflow in `docs/spec.md`. `content/site-files.yml` lists the files that exist on the fictional site, so the "links work" rule has something to check against.
+Ten pages, in `content/pages/`. Each one shows a route through the workflow in `docs/spec.md`. `content/site-files.yml` lists the files that exist on the fictional site, so the "links work" rule has something to check against. The demo checks certification as at 1 November 2026 (`config/rules.yml`), so these cases stay true as time passes.
 
 Pages 1 and 2 show the rules catching an AI mistake. A good AI rarely makes these mistakes, so each page uses one scripted AI response, labelled in the panel as an example. The rules check it live. Everything else comes from the AI.
 

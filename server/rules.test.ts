@@ -79,6 +79,13 @@ test("certification: older than two years fails", () => {
   assert.equal(result?.reason, "Last certified 14 February 2023, more than two years ago.");
 });
 
+test("certification: the config's as_of date keeps the demo cases true after page 10 turns two", () => {
+  const certified = (context: { today?: Date }) =>
+    checkPage(page(10), rules, context).find((r) => r.ruleId === "certified-in-two-years")?.passed;
+  assert.equal(certified({}), true, "checked as at the config's date");
+  assert.equal(certified({ today: new Date("2026-11-05") }), false, "checked a day after it turns two");
+});
+
 test("reading age: hard prose fails, and protected wording doesn't count", () => {
   const hard = "Pharmacological interventions necessitate comprehensive consideration of contraindications, concomitant administration and individual physiological characteristics.";
   const plain = "This page is for patients. Hay fever is an allergy to pollen.";

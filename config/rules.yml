@@ -70,6 +70,9 @@ rules:
     source: ABPI Code, clause 8
     check: certified_within
     years: 2
+    # Demo only: check as at this date, so the demo cases stay true.
+    # Leave it out to check against today.
+    as_of: "2026-11-01"
     message: Last certified {date}, more than two years ago.
 
   # Writing for patients (NHS content guide)

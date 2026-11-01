@@ -21,7 +21,7 @@ export interface CheckContext {
   originalBody?: string;
   /** Every path a link may point to, for the links rule. */
   knownPaths?: Set<string>;
-  /** The day certification is measured from. Defaults to today. */
+  /** The day certification is measured from. Defaults to the rule's as_of date, then today. */
   today?: Date;
 }
 
@@ -116,7 +116,8 @@ const CHECKS: Record<string, (rule: Rule, a: Analysed) => Outcome> = {
   certified_within(rule, a) {
     const certified = a.page.meta.certified;
     if (!certified) return skip;
-    const cutoff = new Date(a.context.today ?? new Date());
+    const asOf = rule.as_of ? new Date(rule.as_of as string) : new Date();
+    const cutoff = new Date(a.context.today ?? asOf);
     cutoff.setFullYear(cutoff.getFullYear() - (rule.years as number));
     const date = new Date(certified);
     if (date >= cutoff) return pass;
