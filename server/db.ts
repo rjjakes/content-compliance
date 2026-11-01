@@ -41,6 +41,8 @@ export interface CopyPageDetail extends CopyPage {
   body: string;
   /** The text as imported. */
   originalBody: string;
+  /** The editor's last save, as a decision id, or null if the page hasn't been saved. */
+  lastSave: number | null;
 }
 
 /** Loads the pages from content/pages/ into the database, as the batch arrived. */
@@ -104,7 +106,9 @@ export async function getProgress(db: Db, externalId: string): Promise<CopyPage[
 
 /** One page of the editor's open copy, or nothing if the page isn't in it. */
 export async function getCopyPage(db: Db, externalId: string, pageId: number): Promise<CopyPageDetail | undefined> {
-  const sql = `SELECT ${COLUMNS}, cp.body, p.body AS "originalBody" ${OPEN_COPY} AND p.id = $2`;
+  const sql = `SELECT ${COLUMNS}, cp.body, p.body AS "originalBody",
+    (SELECT max(d.id)::int FROM decisions d WHERE d.copy_id = c.id AND d.page_id = p.id AND d.action = 'save') AS "lastSave"
+    ${OPEN_COPY} AND p.id = $2`;
   return (await db.query<CopyPageDetail>(sql, [externalId, pageId])).rows[0];
 }
 
@@ -159,10 +163,12 @@ export interface Change {
   reason?: string;
 }
 
-/** A stored change, and whether every rule it was checked against passed. */
+/** A stored change, whether every rule it was checked against passed, and the editor's latest decision on it. */
 export interface StoredChange extends Change {
   id: number;
   passed: boolean;
+  decision: "accept" | "reject" | null;
+  decisionId: number | null;
 }
 
 /** Logs the fixed rules' results on a page as it stands ("Prepare for review"). */
@@ -198,11 +204,13 @@ export async function getChanges(db: Db, externalId: string, pageId: number): Pr
   const result = await db.query<StoredChange>(
     `${COPY_PAGE}
      SELECT pr.id::int AS id, pr.kind, pr.rule_id AS "ruleId", pr.attempt, pr.original_text AS original,
-            pr.proposed_text AS proposed, pr.reason, COALESCE(bool_and(cr.passed), true) AS passed
+            pr.proposed_text AS proposed, pr.reason, COALESCE(bool_and(cr.passed), true) AS passed,
+            d.action AS decision, d.id::int AS "decisionId"
      FROM copy_page
      JOIN proposals pr ON pr.copy_id = copy_page.copy_id AND pr.page_id = copy_page.page_id AND pr.kind <> 'outcome'
      LEFT JOIN check_results cr ON cr.proposal_id = pr.id
-     GROUP BY pr.id ORDER BY pr.id`,
+     LEFT JOIN LATERAL (SELECT action, id FROM decisions WHERE proposal_id = pr.id ORDER BY id DESC LIMIT 1) d ON true
+     GROUP BY pr.id, d.action, d.id ORDER BY pr.id`,
     [externalId, pageId],
   );
   return result.rows;
@@ -214,5 +222,50 @@ export async function setStatus(db: Db, externalId: string, pageId: number, stat
      UPDATE copy_pages cp SET status = $3, updated_at = now()
      FROM copy_page WHERE cp.copy_id = copy_page.copy_id AND cp.page_id = copy_page.page_id`,
     [externalId, pageId, status],
+  );
+}
+
+/** An editor's decision, as the audit trail stores it (db/schema.sql, "decisions"). */
+export interface Decision {
+  action: "accept" | "reject" | "save" | "migrate" | "retire" | "redirect";
+  proposalId?: number;
+  targetPageId?: number;
+  originalText?: string;
+  finalText?: string;
+  note?: string;
+}
+
+/**
+ * Stores an editor's decision with the rule results it led to, and any new text or status for the page,
+ * in one statement.
+ */
+export async function recordDecision(
+  db: Db,
+  externalId: string,
+  pageId: number,
+  decision: Decision,
+  update: { body?: string; status?: string },
+  checks: Check[],
+  configVersion: string,
+) {
+  const { action, proposalId, targetPageId, originalText, finalText, note } = decision;
+  await db.query(
+    `${COPY_PAGE},
+     decision AS (
+       INSERT INTO decisions (copy_id, page_id, editor_id, proposal_id, action, target_page_id, original_text, final_text, note)
+       SELECT copy_id, page_id, (SELECT id FROM editors WHERE external_id = $1), $3, $4, $5, $6, $7, $8 FROM copy_page
+       RETURNING id, copy_id, page_id
+     ),
+     page_update AS (
+       UPDATE copy_pages cp SET body = COALESCE($9::text, cp.body), status = COALESCE($10::text, cp.status), updated_at = now()
+       FROM decision WHERE cp.copy_id = decision.copy_id AND cp.page_id = decision.page_id AND ($9::text IS NOT NULL OR $10::text IS NOT NULL)
+     )
+     INSERT INTO check_results (copy_id, page_id, ran_on, decision_id, check_kind, check_id, config_version, passed, reason)
+     SELECT copy_id, page_id, 'decision', id, 'fixed_rule', c."ruleId", $11, c.passed, c.reason
+     FROM decision, json_to_recordset($12) AS c("ruleId" text, passed boolean, reason text)`,
+    [
+      externalId, pageId, proposalId ?? null, action, targetPageId ?? null, originalText ?? null, finalText ?? null, note ?? null,
+      update.body ?? null, update.status ?? null, configVersion, JSON.stringify(checks),
+    ],
   );
 }

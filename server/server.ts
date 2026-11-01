@@ -8,8 +8,8 @@ import { McpServer, type CallToolResult, type ReadResourceResult } from "@modelc
 import { z } from "zod";
 import { knownPaths, loadPages, loadSiteFiles, type ContentPage } from "./content.ts";
 import {
-  getChanges, getCopyPage, getProgress, LOCAL_EDITOR, logPageChecks, openCopy, recordChange, recordOutcome, setStatus, STATUS_LABELS,
-  type CopyPage, type Db, type StoredChange,
+  getChanges, getCopyPage, getProgress, LOCAL_EDITOR, logPageChecks, openCopy, recordChange, recordDecision, recordOutcome, setStatus,
+  STATUS_LABELS, type CopyPage, type CopyPageDetail, type Db, type StoredChange,
 } from "./db.ts";
 import { loadGuidelines } from "./guidelines.ts";
 import { checkPage, loadRules } from "./rules.ts";
@@ -46,11 +46,22 @@ async function panelHtml(): Promise<string> {
   return page.replace(/(src="|from ")\//g, `$1${PANEL_DEV_URL}/`);
 }
 
-/** Runs the fixed rules on a page's text, against the page as imported. */
+/** Runs the fixed rules on a page's text, against the page as imported. Checks are the results as the audit trail stores them. */
 function runRules(page: ContentPage, text: string) {
   const results = checkPage({ meta: page.meta, body: text }, rules, { originalBody: page.body, knownPaths: known });
   const failures = results.filter((r) => !r.passed).map((r) => ({ ruleId: r.ruleId, name: r.name, reason: r.reason! }));
-  return { results, rulesChecked: results.length, failures };
+  const checks = results.map(({ ruleId, passed, reason }) => ({ ruleId, passed, reason }));
+  return { results, checks, rulesChecked: results.length, failures };
+}
+
+/** The page text with the changes the editor has accepted since the last save applied. */
+function workingText(saved: CopyPageDetail, changes: StoredChange[]): string {
+  let text = saved.body;
+  for (const c of changes) {
+    const acceptedSinceSave = c.decision === "accept" && c.decisionId! > (saved.lastSave ?? 0);
+    if (acceptedSinceSave && c.original && text.split(c.original).length === 2) text = text.split(c.original).join(c.proposed!);
+  }
+  return text;
 }
 
 /**
@@ -150,11 +161,8 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
       if (!page) return notInBatch(id);
       const saved = await getCopyPage(db, editor, id);
       const body = text ?? saved?.body ?? page.body;
-      const { results, rulesChecked, failures } = runRules(page, body);
-      if (text === undefined && saved) {
-        const checks = results.map(({ ruleId, passed, reason }) => ({ ruleId, passed, reason }));
-        await logPageChecks(db, editor, id, checks, RULES_VERSION);
-      }
+      const { checks, rulesChecked, failures } = runRules(page, body);
+      if (text === undefined && saved) await logPageChecks(db, editor, id, checks, RULES_VERSION);
       const duplicateOf = duplicatesOf(id, body);
       const heading = `Page ${id}, ${page.meta.type}, ${page.meta.title}:`;
       const summary = failures.length
@@ -282,9 +290,9 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
         }
         if (attempt) tries.set(ruleId!, attempt);
         // Checked against the rule it fixes and every rule that passed before, so earlier failures don't count against it.
-        const checks = runRules(page, text.split(original).join(proposed))
-          .results.filter((r) => r.ruleId === ruleId || !failing.includes(r.ruleId))
-          .map(({ ruleId, passed, reason }) => ({ ruleId, passed, reason }));
+        const checks = runRules(page, text.split(original).join(proposed)).checks.filter(
+          (c) => c.ruleId === ruleId || !failing.includes(c.ruleId),
+        );
         await recordChange(db, editor, id, { kind, ruleId, attempt, original, proposed, reason }, checks, RULES_VERSION);
         const broken = checks.filter((c) => !c.passed).map((c) => c.reason);
         report.push(broken.length ? `${label}: failed the rules, not shown to the editor. ${broken.join(" ")}` : `${label}: passed.`);
@@ -297,7 +305,58 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
     },
   );
 
-  // Panel only: the AI can't see or call it.
+  // Panel only: the AI can't see or call these. People decide.
+  registerAppTool(
+    server,
+    "record_decision",
+    {
+      title: "Record decision",
+      description:
+        "Records the editor's decision on a page: accept or reject one of the AI's changes, save the page, " +
+        "or approve its outcome. Migrate needs every rule to pass on the saved text. Panel only.",
+      inputSchema: z.object({
+        page: z.number().int(),
+        action: z.enum(["accept", "reject", "save", "migrate", "retire", "redirect"]),
+        changeId: z.number().int().optional(),
+        target: z.number().int().optional(),
+        note: z.string().optional(),
+      }),
+      _meta: { ui: { visibility: ["app"] } },
+    },
+    async ({ page: id, action, changeId, target, note }): Promise<CallToolResult> => {
+      const page = pages.find((p) => p.meta.id === id);
+      const saved = page && (await getCopyPage(db, editor, id));
+      if (!page || !saved) return notInBatch(id);
+      if (saved.status.startsWith("approved_")) return error(`Page ${id} is already decided.`);
+      const changes = await getChanges(db, editor, id);
+      const text = workingText(saved, changes);
+
+      if (action === "accept" || action === "reject") {
+        const change = changes.find((c) => c.id === changeId && c.passed && c.kind !== "cannot_fix");
+        if (!change) return error("There is no such change on this page.");
+        if (action === "accept" && text.split(change.original!).length !== 2) return error("This change no longer fits the page text.");
+        await recordDecision(db, editor, id, { action, proposalId: change.id, note }, {}, [], RULES_VERSION);
+      } else if (action === "save") {
+        if (text === saved.body) return error("There are no changes to save.");
+        const decision = { action, originalText: saved.body, finalText: text, note };
+        await recordDecision(db, editor, id, decision, { body: text }, runRules(page, text).checks, RULES_VERSION);
+      } else if (action === "migrate") {
+        if (text !== saved.body) return error("Save your changes first.");
+        const { checks, failures } = runRules(page, saved.body);
+        if (failures.length) return error("A page can migrate only when every rule passes.");
+        await recordDecision(db, editor, id, { action, note }, { status: "approved_migrate" }, checks, RULES_VERSION);
+      } else if (action === "retire") {
+        await recordDecision(db, editor, id, { action, note }, { status: "approved_retire" }, [], RULES_VERSION);
+      } else {
+        if (target === undefined || target === id || !pages.some((p) => p.meta.id === target)) {
+          return error("A redirect needs a target: another page in the batch.");
+        }
+        await recordDecision(db, editor, id, { action, targetPageId: target, note }, { status: "approved_redirect" }, [], RULES_VERSION);
+      }
+      return { content: [{ type: "text", text: `Recorded: ${action} on page ${id}.` }] };
+    },
+  );
+
   registerAppTool(
     server,
     "get_progress",
@@ -327,11 +386,16 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
       const saved = page && (await getCopyPage(db, editor, id));
       if (!page || !saved) return notInBatch(id);
       const { title, type, status, body, outcome } = saved;
+      const stored = await getChanges(db, editor, id);
+      const text = workingText(saved, stored);
       const { rulesChecked, failures } = runRules(page, body);
-      const changes = (await getChanges(db, editor, id))
+      const changes = stored
         .filter((c) => c.passed)
-        .map(({ id, kind, ruleId, original, proposed, reason }) => ({ id, kind, ruleId, original, proposed, reason }));
-      const detail = { id, title, type, audience: page.meta.audience ?? "", status: STATUS_LABELS[status], text: body, outcome, rulesChecked, failures, changes };
+        .map(({ id, kind, ruleId, original, proposed, reason, decision }) => ({ id, kind, ruleId, original, proposed, reason, decision }));
+      const detail = {
+        id, title, type, audience: page.meta.audience ?? "", status: STATUS_LABELS[status], text, outcome, rulesChecked, failures, changes,
+        unsaved: text !== body, pendingFailures: text !== body ? runRules(page, text).failures : failures,
+      };
       return { content: [{ type: "text", text: JSON.stringify(detail) }], structuredContent: detail };
     },
   );

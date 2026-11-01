@@ -27,6 +27,8 @@ export const Change = z.object({
   original: z.string().nullable(),
   proposed: z.string().nullable(),
   reason: z.string().nullable(),
+  /** The editor's latest decision on it. */
+  decision: z.enum(["accept", "reject"]).nullable(),
 });
 
 /** What get_page returns. */
@@ -38,7 +40,11 @@ export const PageDetail = z.object({
   status: z.string(),
   text: z.string(),
   rulesChecked: z.number(),
+  /** The rules that fail on the saved text. */
   failures: z.array(Failure),
   outcome: Outcome.nullable(),
   changes: z.array(Change),
+  /** Whether the text has accepted changes that aren't saved yet, and the rules that would still fail with them. */
+  unsaved: z.boolean(),
+  pendingFailures: z.array(Failure),
 });

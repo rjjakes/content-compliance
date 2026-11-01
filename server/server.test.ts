@@ -105,3 +105,29 @@ test("propose_fixes: after two failed tries, a rule needs a manual fix", async (
   assert.match((result.content[0] as { text: string }).text, /both tries are used/);
   assert.equal((await call("get_page", { page: 3 })).structured.status, "Needs manual fix");
 });
+
+test("record_decision: migrate waits until the accepted fix is saved and every rule passes", async () => {
+  const refused = async () => (await call("record_decision", { page: 2, action: "migrate" })).result.isError;
+  assert.equal(await refused(), true, "a rule fails");
+  const fix = (await call("get_page", { page: 2 })).structured.changes[0];
+  await call("record_decision", { page: 2, action: "accept", changeId: fix.id });
+  assert.equal((await call("get_page", { page: 2 })).structured.unsaved, true);
+  assert.equal(await refused(), true, "not saved");
+  await call("record_decision", { page: 2, action: "save" });
+  const saved = (await call("get_page", { page: 2 })).structured;
+  assert.deepEqual(saved.failures, []);
+  assert.match(saved.text, /It can soothe itching/);
+  await call("record_decision", { page: 2, action: "migrate" });
+  assert.equal((await call("get_page", { page: 2 })).structured.status, "Approved: migrate");
+});
+
+test("record_decision: retire is always allowed, and a redirect needs a target in the batch", async () => {
+  await call("record_decision", { page: 10, action: "retire" });
+  assert.equal((await call("record_decision", { page: 8, action: "redirect" })).result.isError, true);
+  await call("record_decision", { page: 8, action: "redirect", target: 7 });
+  const batch = (await call("get_progress")).structured;
+  const status = (id: number) => batch.pages.find((p: { id: number }) => p.id === id).status;
+  assert.equal(status(10), "Approved: retire");
+  assert.equal(status(8), "Approved: redirect");
+  assert.equal(batch.decided, 3);
+});

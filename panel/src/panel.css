@@ -4,6 +4,7 @@
   color-scheme: light dark;
   --color-text-primary: light-dark(#1f2937, #f3f4f6);
   --color-text-secondary: light-dark(#4b5563, #9ca3af);
+  --color-text-danger: light-dark(#b91c1c, #f87171);
   --color-background-secondary: light-dark(#f3f4f6, #262626);
   --color-background-danger: light-dark(#fef2f2, #3b1414);
   --color-background-success: light-dark(#f0fdf4, #12321e);
@@ -152,6 +153,39 @@ h3 {
 .change ins {
   margin-top: 4px;
   background: var(--color-background-success);
+}
+
+/* Buttons for a decision, with any note or message. They wrap on a narrow pane. */
+.actions {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  margin: 8px 0;
+}
+
+.actions p {
+  flex-basis: 100%;
+}
+
+.actions input {
+  flex: 1 1 160px;
+  min-height: 44px;
+  padding: 6px 10px;
+  border: var(--border-width-regular) solid var(--color-border-primary);
+  border-radius: var(--border-radius-md);
+  background: transparent;
+  color: inherit;
+  font: inherit;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+.error {
+  color: var(--color-text-danger);
 }
 
 .page-text {

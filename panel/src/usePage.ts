@@ -1,11 +1,13 @@
-// Loads one page of the editor's copy through get_page, a tool only the panel can call.
+// Loads one page of the editor's copy through get_page, and loads it again after each decision.
 import type { App } from "@modelcontextprotocol/ext-apps";
-import { useEffect, useState } from "react";
+import { useCallback, useEffect, useState } from "react";
 import type { PageDetail } from "./types";
 
-export function usePage(app: App, id: number): { page?: PageDetail; failed: boolean } {
+export function usePage(app: App, id: number): { page?: PageDetail; failed: boolean; reload: () => void } {
   const [page, setPage] = useState<PageDetail>();
   const [failed, setFailed] = useState(false);
+  const [version, setVersion] = useState(0);
+  const reload = useCallback(() => setVersion((v) => v + 1), []);
 
   useEffect(() => {
     let current = true;
@@ -20,7 +22,7 @@ export function usePage(app: App, id: number): { page?: PageDetail; failed: bool
     return () => {
       current = false;
     };
-  }, [app, id]);
+  }, [app, id, version]);
 
-  return { page, failed };
+  return { page, failed, reload };
 }
