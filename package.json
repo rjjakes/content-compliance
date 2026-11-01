@@ -12,7 +12,7 @@
     "typecheck": "tsc --noEmit && tsc --noEmit -p panel",
     "start": "npm run build && node --env-file=.env server/main.ts",
     "build": "vite build",
-    "dev": "concurrently --names panel,server \"vite build --watch\" \"node --watch-path=server --watch-path=config --watch-path=content --env-file=.env server/main.ts\""
+    "dev": "concurrently --names panel,server \"vite\" \"PANEL_DEV_URL=http://localhost:5173 node --watch-path=server --watch-path=config --watch-path=content --env-file=.env server/main.ts\""
   },
   "dependencies": {
     "@modelcontextprotocol/express": "^2.0.2",

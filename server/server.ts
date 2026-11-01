@@ -15,6 +15,26 @@ const known = knownPaths(pages, loadSiteFiles());
 
 const PANEL_URI = "ui://content-compliance/panel.html";
 const PANEL_FILE = new URL("../dist/mcp-app.html", import.meta.url);
+/** In development, the Vite dev server that serves the panel (npm run dev sets it). */
+const PANEL_DEV_URL = process.env.PANEL_DEV_URL;
+
+/** In development, the panel loads its code from the dev server, so the host must allow it. */
+const PANEL_CSP = PANEL_DEV_URL && { resourceDomains: [PANEL_DEV_URL], connectDomains: [PANEL_DEV_URL, PANEL_DEV_URL.replace(/^http/, "ws")] };
+
+/**
+ * The panel's HTML: the built file, or in development the dev server's page with its script
+ * addresses made absolute. A host keeps the HTML it first fetched, but the code behind it then
+ * comes from the dev server, so changes show without restarting the host.
+ */
+async function panelHtml(): Promise<string> {
+  if (!PANEL_DEV_URL) {
+    return readFile(PANEL_FILE, "utf8").catch(() => {
+      throw new Error("The panel isn't built. Run npm run build.");
+    });
+  }
+  const page = await (await fetch(`${PANEL_DEV_URL}/mcp-app.html`)).text();
+  return page.replace(/(src="|from ")\//g, `$1${PANEL_DEV_URL}/`);
+}
 
 /** Runs the fixed rules on a page's text, against the page as imported. */
 function runRules(page: ContentPage, text: string) {
@@ -74,13 +94,12 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
     },
   );
 
-  registerAppResource(server, PANEL_URI, PANEL_URI, { mimeType: RESOURCE_MIME_TYPE }, async (): Promise<ReadResourceResult> => {
-    const html = await readFile(PANEL_FILE, "utf8").catch(() => {
-      throw new Error("The panel isn't built. Run npm run build.");
-    });
-    // No border: the panel sits on the conversation, in the host's own colours.
-    return { contents: [{ uri: PANEL_URI, mimeType: RESOURCE_MIME_TYPE, text: html, _meta: { ui: { prefersBorder: false } } }] };
-  });
+  // No border: the panel sits on the conversation, in the host's own colours. The spec lets these
+  // settings go on the resource or on its contents; both, in case a host reads only one.
+  const ui = { prefersBorder: false, ...(PANEL_CSP ? { csp: PANEL_CSP } : {}) };
+  registerAppResource(server, PANEL_URI, PANEL_URI, { mimeType: RESOURCE_MIME_TYPE, _meta: { ui } }, async (): Promise<ReadResourceResult> => ({
+    contents: [{ uri: PANEL_URI, mimeType: RESOURCE_MIME_TYPE, text: await panelHtml(), _meta: { ui } }],
+  }));
 
   server.registerTool(
     "check_page",
