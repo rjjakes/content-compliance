@@ -242,7 +242,7 @@ export async function setStatus(db: Db, externalId: string, pageId: number, stat
 }
 
 /** An editor's decision, as the audit trail stores it (db/schema.sql, "decisions"). */
-export interface Decision {
+export interface DecisionRecord {
   action: "accept" | "reject" | "save" | "migrate" | "retire" | "redirect";
   proposalId?: number;
   targetPageId?: number;
@@ -259,7 +259,7 @@ export async function recordDecision(
   db: Db,
   externalId: string,
   pageId: number,
-  decision: Decision,
+  decision: DecisionRecord,
   update: { body?: string; status?: string },
   checks: Check[],
   configVersion: string,

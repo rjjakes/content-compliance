@@ -31,6 +31,17 @@ export const Change = z.object({
   decision: z.enum(["accept", "reject"]).nullable(),
 });
 
+/** An editor's decision on a page. Each kind of decision carries exactly the fields it needs. */
+const note = z.string().optional().describe("Why, in the editor's words (optional).");
+export const Decision = z.discriminatedUnion("action", [
+  z.object({ action: z.literal("accept"), changeId: z.number().int(), note }),
+  z.object({ action: z.literal("reject"), changeId: z.number().int(), note }),
+  z.object({ action: z.literal("save"), note }),
+  z.object({ action: z.literal("migrate"), note }),
+  z.object({ action: z.literal("retire"), note }),
+  z.object({ action: z.literal("redirect"), target: z.number().int().describe("The page to redirect to."), note }),
+]);
+
 /** What get_page returns. */
 export const PageDetail = z.object({
   id: z.number(),

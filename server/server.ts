@@ -13,7 +13,7 @@ import {
 } from "./db.ts";
 import { loadGuidelines } from "./guidelines.ts";
 import { checkPage, loadRules } from "./rules.ts";
-import { Batch, Failure, Outcome, PageDetail } from "./schemas.ts";
+import { Batch, Decision, Failure, Outcome, PageDetail } from "./schemas.ts";
 
 const RULES_FILE = new URL("../config/rules.yml", import.meta.url);
 const rules = loadRules(RULES_FILE);
@@ -339,43 +339,48 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
       description:
         "Records the editor's decision on a page: accept or reject one of the AI's changes, save the page, " +
         "or approve its outcome. Migrate needs every rule to pass on the saved text. Panel only.",
-      inputSchema: z.object({
-        page: z.number().int(),
-        action: z.enum(["accept", "reject", "save", "migrate", "retire", "redirect"]),
-        changeId: z.number().int().optional(),
-        target: z.number().int().optional(),
-        note: z.string().optional(),
-      }),
+      inputSchema: z.object({ page: PAGE_NUMBER, decision: Decision }),
       _meta: { ui: { visibility: ["app"] } },
     },
-    async ({ page: id, action, changeId, target, note }): Promise<CallToolResult> => {
+    async ({ page: id, decision }): Promise<CallToolResult> => {
       const saved = await getCopyPage(db, editor, id);
       if (!saved) return notOpen(id);
       if (saved.status.startsWith("approved_")) return error(`Page ${id} is already decided.`);
       const changes = await getChanges(db, editor, id);
       const text = workingText(saved, changes);
+      const { action, note } = decision;
 
-      if (action === "accept" || action === "reject") {
-        const change = changes.find((c) => c.id === changeId && c.passed && c.kind !== "cannot_fix");
-        if (!change) return error("There is no such change on this page.");
-        if (action === "accept" && text.split(change.original!).length !== 2) return error("This change no longer fits the page text.");
-        await recordDecision(db, editor, id, { action, proposalId: change.id, note }, {}, [], RULES_VERSION);
-      } else if (action === "save") {
-        if (text === saved.body) return error("There are no changes to save.");
-        const decision = { action, originalText: saved.body, finalText: text, note };
-        await recordDecision(db, editor, id, decision, { body: text }, (await check(saved, text)).checks, RULES_VERSION);
-      } else if (action === "migrate") {
-        if (text !== saved.body) return error("Save your changes first.");
-        const { checks, failures } = await check(saved, saved.body);
-        if (failures.length) return error("A page can migrate only when every rule passes.");
-        await recordDecision(db, editor, id, { action, note }, { status: "approved_migrate" }, checks, RULES_VERSION);
-      } else if (action === "retire") {
-        await recordDecision(db, editor, id, { action, note }, { status: "approved_retire" }, [], RULES_VERSION);
-      } else {
-        if (target === undefined || target === id || !(await getCopyPage(db, editor, target))) {
-          return error("A redirect needs a target: another page in the batch.");
+      switch (decision.action) {
+        case "accept":
+        case "reject": {
+          const change = changes.find((c) => c.id === decision.changeId && c.passed && c.kind !== "cannot_fix");
+          if (!change) return error("There is no such change on this page.");
+          if (action === "accept" && text.split(change.original!).length !== 2) return error("This change no longer fits the page text.");
+          await recordDecision(db, editor, id, { action, proposalId: change.id, note }, {}, [], RULES_VERSION);
+          break;
         }
-        await recordDecision(db, editor, id, { action, targetPageId: target, note }, { status: "approved_redirect" }, [], RULES_VERSION);
+        case "save": {
+          if (text === saved.body) return error("There are no changes to save.");
+          const record = { action, originalText: saved.body, finalText: text, note };
+          await recordDecision(db, editor, id, record, { body: text }, (await check(saved, text)).checks, RULES_VERSION);
+          break;
+        }
+        case "migrate": {
+          if (text !== saved.body) return error("Save your changes first.");
+          const { checks, failures } = await check(saved, saved.body);
+          if (failures.length) return error("A page can migrate only when every rule passes.");
+          await recordDecision(db, editor, id, { action, note }, { status: "approved_migrate" }, checks, RULES_VERSION);
+          break;
+        }
+        case "retire":
+          await recordDecision(db, editor, id, { action, note }, { status: "approved_retire" }, [], RULES_VERSION);
+          break;
+        case "redirect": {
+          const { target } = decision;
+          if (target === id || !(await getCopyPage(db, editor, target))) return error("A redirect needs a target: another page in the batch.");
+          await recordDecision(db, editor, id, { action, targetPageId: target, note }, { status: "approved_redirect" }, [], RULES_VERSION);
+          break;
+        }
       }
       return { content: [{ type: "text", text: `Recorded: ${action} on page ${id}.` }] };
     },

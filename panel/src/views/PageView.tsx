@@ -2,13 +2,13 @@
 // the AI's suggestions, the page text and the outcome. The editor accepts or rejects each change, saves, and decides.
 import type { App } from "@modelcontextprotocol/ext-apps";
 import { useState } from "react";
-import type { Change, Outcome, PageDetail } from "../types";
+import type { Change, Decision, Outcome, PageDetail } from "../types";
 import { usePage } from "../usePage";
 
 const outcomeLabel = (o: Outcome) =>
   o.outcome === "redirect" ? `Redirect to page ${o.target}` : o.outcome === "retire" ? "Retire" : "Migrate";
 
-type Decide = (args: { action: string; changeId?: number; target?: number; note?: string }) => void;
+type Decide = (decision: Decision) => void;
 
 /** One of the AI's changes, as the passage before and after, with Accept and Reject until the editor decides. */
 function ChangeView({ change, decide, open }: { change: Change; decide: Decide; open: boolean }) {
@@ -59,9 +59,9 @@ export function PageView({ app, id, onBack }: Props) {
   const { page, failed, reload } = usePage(app, id);
   const [error, setError] = useState<string>();
 
-  const decide: Decide = async (args) => {
+  const decide: Decide = async (decision) => {
     setError(undefined);
-    const result = await app.callServerTool({ name: "record_decision", arguments: { page: id, ...args } });
+    const result = await app.callServerTool({ name: "record_decision", arguments: { page: id, decision } });
     const first = result.content?.[0];
     if (result.isError) setError(first?.type === "text" ? first.text : "That didn't work.");
     reload();
