@@ -108,6 +108,14 @@ export async function getCopyPage(db: Db, externalId: string, pageId: number): P
   return (await db.query<CopyPageDetail>(sql, [externalId, pageId])).rows[0];
 }
 
+// The editor's open copy of one page ($1 the editor, $2 the page), as the start of a statement.
+const COPY_PAGE = `WITH copy_page AS (
+  SELECT cp.copy_id, cp.page_id FROM editors e
+  JOIN copies c ON c.editor_id = e.id AND c.reset_at IS NULL
+  JOIN copy_pages cp ON cp.copy_id = c.id
+  WHERE e.external_id = $1 AND cp.page_id = $2
+)`;
+
 /**
  * Stores the AI's recommended outcome and sets the page's status, in one statement.
  * A page to migrate stays a candidate until its fixes are proposed (docs/spec.md, "How it works", step 2.5).
@@ -121,12 +129,7 @@ export async function recordOutcome(
 ): Promise<string> {
   const status = { migrate: "candidate", retire: "recommend_retire", redirect: "recommend_redirect" }[outcome];
   await db.query(
-    `WITH copy_page AS (
-       SELECT cp.copy_id, cp.page_id FROM editors e
-       JOIN copies c ON c.editor_id = e.id AND c.reset_at IS NULL
-       JOIN copy_pages cp ON cp.copy_id = c.id
-       WHERE e.external_id = $1 AND cp.page_id = $2
-     ),
+    `${COPY_PAGE},
      proposal AS (
        INSERT INTO proposals (copy_id, page_id, kind, outcome, target_page_id, reason)
        SELECT copy_id, page_id, 'outcome', $3, $4, $5 FROM copy_page
@@ -137,4 +140,79 @@ export async function recordOutcome(
     [externalId, pageId, outcome, target ?? null, reason, status],
   );
   return status;
+}
+
+/** One fixed rule's result, as the audit trail stores it. */
+export interface Check {
+  ruleId: string;
+  passed: boolean;
+  reason?: string;
+}
+
+/** A fix, a reason the AI can't fix a rule, or a rewrite. */
+export interface Change {
+  kind: "fix" | "cannot_fix" | "rewrite";
+  ruleId?: string;
+  attempt?: number;
+  original?: string;
+  proposed?: string;
+  reason?: string;
+}
+
+/** A stored change, and whether every rule it was checked against passed. */
+export interface StoredChange extends Change {
+  id: number;
+  passed: boolean;
+}
+
+/** Logs the fixed rules' results on a page as it stands ("Prepare for review"). */
+export async function logPageChecks(db: Db, externalId: string, pageId: number, checks: Check[], configVersion: string) {
+  await db.query(
+    `${COPY_PAGE}
+     INSERT INTO check_results (copy_id, page_id, ran_on, check_kind, check_id, config_version, passed, reason)
+     SELECT copy_id, page_id, 'page', 'fixed_rule', c."ruleId", $3, c.passed, c.reason
+     FROM copy_page, json_to_recordset($4) AS c("ruleId" text, passed boolean, reason text)`,
+    [externalId, pageId, configVersion, JSON.stringify(checks)],
+  );
+}
+
+/** Stores one of the AI's changes with the rule results it was checked against, in one statement. */
+export async function recordChange(db: Db, externalId: string, pageId: number, change: Change, checks: Check[], configVersion: string) {
+  const { kind, ruleId, attempt, original, proposed, reason } = change;
+  await db.query(
+    `${COPY_PAGE},
+     proposal AS (
+       INSERT INTO proposals (copy_id, page_id, kind, rule_id, attempt, original_text, proposed_text, reason)
+       SELECT copy_id, page_id, $3, $4, $5, $6, $7, $8 FROM copy_page
+       RETURNING id, copy_id, page_id
+     )
+     INSERT INTO check_results (copy_id, page_id, ran_on, proposal_id, check_kind, check_id, config_version, passed, reason)
+     SELECT copy_id, page_id, 'proposal', id, 'fixed_rule', c."ruleId", $9, c.passed, c.reason
+     FROM proposal, json_to_recordset($10) AS c("ruleId" text, passed boolean, reason text)`,
+    [externalId, pageId, kind, ruleId ?? null, attempt ?? null, original ?? null, proposed ?? null, reason ?? null, configVersion, JSON.stringify(checks)],
+  );
+}
+
+/** The AI's changes to one page, oldest first. A change passed if every rule it was checked against passed. */
+export async function getChanges(db: Db, externalId: string, pageId: number): Promise<StoredChange[]> {
+  const result = await db.query<StoredChange>(
+    `${COPY_PAGE}
+     SELECT pr.id::int AS id, pr.kind, pr.rule_id AS "ruleId", pr.attempt, pr.original_text AS original,
+            pr.proposed_text AS proposed, pr.reason, COALESCE(bool_and(cr.passed), true) AS passed
+     FROM copy_page
+     JOIN proposals pr ON pr.copy_id = copy_page.copy_id AND pr.page_id = copy_page.page_id AND pr.kind <> 'outcome'
+     LEFT JOIN check_results cr ON cr.proposal_id = pr.id
+     GROUP BY pr.id ORDER BY pr.id`,
+    [externalId, pageId],
+  );
+  return result.rows;
+}
+
+export async function setStatus(db: Db, externalId: string, pageId: number, status: string) {
+  await db.query(
+    `${COPY_PAGE}
+     UPDATE copy_pages cp SET status = $3, updated_at = now()
+     FROM copy_page WHERE cp.copy_id = copy_page.copy_id AND cp.page_id = copy_page.page_id`,
+    [externalId, pageId, status],
+  );
 }

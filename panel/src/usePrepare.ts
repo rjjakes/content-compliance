@@ -6,7 +6,9 @@ import { useCallback, useState } from "react";
 const REQUEST =
   "Prepare the content batch for review. For each page in the batch, check it with check_page, " +
   "then recommend migrate, retire or redirect with recommend_outcome, giving a reason. " +
-  "Use the whole list of pages to choose redirect targets and to keep one copy of any duplicates.";
+  "Use the whole list of pages to choose redirect targets and to keep one copy of any duplicates. " +
+  "Then, for each page to migrate, read it with get_page and call propose_fixes once: " +
+  "a fix for each failing rule, or why it can't be fixed, and any rewrites the AI guidelines call for.";
 
 /** Whether the request has gone to the chat, and the function that sends it. If the chat refuses it, the button comes back. */
 export function usePrepare(app: App | null) {

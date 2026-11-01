@@ -19,6 +19,16 @@ export const Batch = z.object({
   pages: z.array(z.object({ id: z.number(), title: z.string(), type: z.string(), status: z.string(), outcome: Outcome.nullable() })),
 });
 
+/** One of the AI's changes the editor sees: a fix or rewrite that passed the rules, or why a rule can't be fixed. */
+export const Change = z.object({
+  id: z.number(),
+  kind: z.enum(["fix", "cannot_fix", "rewrite"]),
+  ruleId: z.string().nullable(),
+  original: z.string().nullable(),
+  proposed: z.string().nullable(),
+  reason: z.string().nullable(),
+});
+
 /** What get_page returns. */
 export const PageDetail = z.object({
   id: z.number(),
@@ -30,4 +40,5 @@ export const PageDetail = z.object({
   rulesChecked: z.number(),
   failures: z.array(Failure),
   outcome: Outcome.nullable(),
+  changes: z.array(Change),
 });

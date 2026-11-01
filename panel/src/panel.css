@@ -5,6 +5,8 @@
   --color-text-primary: light-dark(#1f2937, #f3f4f6);
   --color-text-secondary: light-dark(#4b5563, #9ca3af);
   --color-background-secondary: light-dark(#f3f4f6, #262626);
+  --color-background-danger: light-dark(#fef2f2, #3b1414);
+  --color-background-success: light-dark(#f0fdf4, #12321e);
   --color-border-primary: light-dark(#d1d5db, #404040);
   --border-radius-md: 6px;
   --border-width-regular: 1px;
@@ -127,6 +129,29 @@ h3 {
 
 .failures li + li {
   margin-top: 6px;
+}
+
+/* An AI change: the passage before, then after. */
+.change {
+  margin: 8px 0 12px;
+}
+
+.change del,
+.change ins {
+  display: block;
+  padding: 6px 8px;
+  border-radius: var(--border-radius-md);
+  text-decoration: none;
+  white-space: pre-wrap;
+}
+
+.change del {
+  background: var(--color-background-danger);
+}
+
+.change ins {
+  margin-top: 4px;
+  background: var(--color-background-success);
 }
 
 .page-text {

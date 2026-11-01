@@ -91,9 +91,9 @@ Only one tool opens the panel. The AI's tools have no panel of their own. The pa
 - `open_batch`: opens the panel on the batch, and numbers this copy of the panel.
 - `check_page` (AI and panel): runs the fixed rules on a page and returns failures with reasons. It also runs the duplicate check: whether the page's text is identical to another page in the batch.
 - `recommend_outcome` (AI): takes the AI's migrate, retire or redirect recommendation and its reason, confirms a redirect target exists, and stores it.
-- `propose_fixes` (AI): takes the AI's fixes and rewrites, checks each against the rules, and stores those that pass. Each failure gets two tries. Refuses fixes for a page recommended for retire or redirect.
+- `propose_fixes` (AI): takes the AI's fixes, its reasons for any failure it can't fix, and its rewrites. It checks each change against the rules and stores it with its results; the editor sees only the changes that pass. Each failure gets two tries. Refuses changes to a page recommended for retire or redirect. Its description gives the AI the guidelines in `config/guidelines.yml`.
 - `get_progress` (panel): returns each page's status and recommended outcome, and what the AI is working on.
-- `get_page` (panel): returns one page in full: text, rule results, proposals and audit trail.
+- `get_page` (AI and panel): returns one page in full: text, rule results, the AI's changes that passed the rules, and its audit trail. The AI reads pages here before proposing changes.
 - `record_decision` (panel): stores each Accept, Edit or Reject, each save and each page outcome, with an optional note.
 - `reset` (panel): starts a fresh copy.
 

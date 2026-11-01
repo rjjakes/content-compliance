@@ -64,3 +64,44 @@ test("recommend_outcome: refuses a redirect to a page that isn't in the batch", 
   const { result } = await call("recommend_outcome", { page: 9, outcome: "redirect", target: 11, reason: "Test." });
   assert.equal(result.isError, true);
 });
+
+test("check_page: checking the page as it stands goes into the audit trail", async () => {
+  await call("check_page", { page: 2 });
+  const logged = await db.query(
+    `SELECT count(*)::int AS n FROM check_results cr JOIN copies c ON c.id = cr.copy_id JOIN editors e ON e.id = c.editor_id
+     WHERE e.external_id = 'test' AND cr.page_id = 2 AND cr.ran_on = 'page'`,
+  );
+  assert.ok(logged.rows[0].n > 0);
+});
+
+test("propose_fixes: a page recommended for redirect gets no fixes", async () => {
+  const { result } = await call("propose_fixes", { page: 8, changes: [] });
+  assert.equal(result.isError, true);
+});
+
+test("propose_fixes: a fix that fails is kept from the editor and retried; one that passes makes the page ready", async () => {
+  await call("recommend_outcome", { page: 2, outcome: "migrate", reason: "Test." });
+  const fix = (proposed: string) => ({ kind: "fix", ruleId: "no-claims-list-words", original: "It is clinically proven to soothe itching", proposed });
+  await call("propose_fixes", { page: 2, changes: [fix("It is proven to help soothe itching")] });
+  await call("propose_fixes", { page: 2, changes: [fix("It can soothe itching")] });
+  const page = (await call("get_page", { page: 2 })).structured;
+  assert.equal(page.status, "Ready for review");
+  assert.deepEqual(page.changes.map((c: { proposed: string }) => c.proposed), ["It can soothe itching"]);
+});
+
+test("propose_fixes: a rewrite that changes protected wording is dropped", async () => {
+  await call("recommend_outcome", { page: 1, outcome: "migrate", reason: "Test." });
+  await call("propose_fixes", { page: 1, changes: [{ kind: "rewrite", original: "Take one tablet once a day.", proposed: "Take two tablets once a day." }] });
+  const page = (await call("get_page", { page: 1 })).structured;
+  assert.deepEqual(page.changes, []);
+  assert.equal(page.status, "Ready for review");
+});
+
+test("propose_fixes: after two failed tries, a rule needs a manual fix", async () => {
+  await call("recommend_outcome", { page: 3, outcome: "migrate", reason: "Test." });
+  const fix = (file: string) => ({ kind: "fix", ruleId: "links-work", original: "example-medicine-a-leaflet-2021.pdf", proposed: file });
+  await call("propose_fixes", { page: 3, changes: [fix("leaflet-a.pdf"), fix("leaflet-b.pdf")] });
+  const { result } = await call("propose_fixes", { page: 3, changes: [fix("leaflet-c.pdf")] });
+  assert.match((result.content[0] as { text: string }).text, /both tries are used/);
+  assert.equal((await call("get_page", { page: 3 })).structured.status, "Needs manual fix");
+});

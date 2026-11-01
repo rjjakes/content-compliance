@@ -1,15 +1,25 @@
 // The MCP server and its tools. Modelled on ext-apps examples/basic-server-react/server.ts.
 // The tools are described in docs/spec.md, "Tools (proposed)".
+import { createHash } from "node:crypto";
+import { readFileSync } from "node:fs";
 import { readFile } from "node:fs/promises";
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer, type CallToolResult, type ReadResourceResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
 import { knownPaths, loadPages, loadSiteFiles, type ContentPage } from "./content.ts";
-import { getCopyPage, getProgress, LOCAL_EDITOR, openCopy, recordOutcome, STATUS_LABELS, type CopyPage, type Db } from "./db.ts";
+import {
+  getChanges, getCopyPage, getProgress, LOCAL_EDITOR, logPageChecks, openCopy, recordChange, recordOutcome, setStatus, STATUS_LABELS,
+  type CopyPage, type Db, type StoredChange,
+} from "./db.ts";
+import { loadGuidelines } from "./guidelines.ts";
 import { checkPage, loadRules } from "./rules.ts";
 import { Batch, Failure, Outcome, PageDetail } from "./schemas.ts";
 
-const rules = loadRules();
+const RULES_FILE = new URL("../config/rules.yml", import.meta.url);
+const rules = loadRules(RULES_FILE);
+/** Which version of the rules config ran, stored with every logged check. */
+const RULES_VERSION = createHash("sha256").update(readFileSync(RULES_FILE)).digest("hex").slice(0, 12);
+const guidelines = loadGuidelines();
 const pages = loadPages();
 const known = knownPaths(pages, loadSiteFiles());
 
@@ -40,7 +50,20 @@ async function panelHtml(): Promise<string> {
 function runRules(page: ContentPage, text: string) {
   const results = checkPage({ meta: page.meta, body: text }, rules, { originalBody: page.body, knownPaths: known });
   const failures = results.filter((r) => !r.passed).map((r) => ({ ruleId: r.ruleId, name: r.name, reason: r.reason! }));
-  return { rulesChecked: results.length, failures };
+  return { results, rulesChecked: results.length, failures };
+}
+
+/**
+ * A page's status once the AI has proposed its changes (docs/spec.md, "How it works", step 2.5): ready for review
+ * if every failing rule has a fix that passed; needs a manual fix if a rule the AI couldn't fix, or failed twice, is left.
+ */
+function statusAfterChanges(failing: string[], changes: StoredChange[]): string {
+  const fixed = (rule: string) => changes.some((c) => c.kind === "fix" && c.ruleId === rule && c.passed);
+  const givenUp = (rule: string) =>
+    changes.some((c) => c.kind === "cannot_fix" && c.ruleId === rule) || changes.filter((c) => c.kind === "fix" && c.ruleId === rule).length >= 2;
+  const open = failing.filter((rule) => !fixed(rule));
+  if (!open.length) return "ready_for_review";
+  return open.some(givenUp) ? "needs_manual_fix" : "candidate";
 }
 
 /** The triage check for exact duplicates: other pages in the batch with the same text. */
@@ -108,10 +131,11 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
       description:
         "Runs the fixed rules on a page in the batch and returns each failure with its reason. " +
         "Also says if the page's text is identical to another page in the batch: a fact for triage, not a failure. " +
-        "Give text to check a changed version of the page against the same rules.",
+        "Give text to check a changed version of the page against the same rules. " +
+        "Without text, it checks the page as the editor's copy holds it, and the results go into the audit trail.",
       inputSchema: z.object({
         page: z.number().int().describe(`The page's number in the batch, from 1 to ${pages.length}.`),
-        text: z.string().optional().describe("The page's text after changes, in Markdown. Leave it out to check the page as imported."),
+        text: z.string().optional().describe("The page's text after changes, in Markdown. Leave it out to check the page as it is now."),
       }),
       outputSchema: z.object({
         page: z.number(),
@@ -120,13 +144,17 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
         failures: z.array(Failure),
         duplicateOf: z.array(z.number()),
       }),
-      annotations: { readOnlyHint: true },
     },
     async ({ page: id, text }): Promise<CallToolResult> => {
       const page = pages.find((p) => p.meta.id === id);
       if (!page) return notInBatch(id);
-      const body = text ?? page.body;
-      const { rulesChecked, failures } = runRules(page, body);
+      const saved = await getCopyPage(db, editor, id);
+      const body = text ?? saved?.body ?? page.body;
+      const { results, rulesChecked, failures } = runRules(page, body);
+      if (text === undefined && saved) {
+        const checks = results.map(({ ruleId, passed, reason }) => ({ ruleId, passed, reason }));
+        await logPageChecks(db, editor, id, checks, RULES_VERSION);
+      }
       const duplicateOf = duplicatesOf(id, body);
       const heading = `Page ${id}, ${page.meta.type}, ${page.meta.title}:`;
       const summary = failures.length
@@ -180,7 +208,96 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
     },
   );
 
-  // Panel only: the AI can't see or call these.
+  server.registerTool(
+    "propose_fixes",
+    {
+      title: "Propose fixes",
+      description: [
+        "Proposes changes to one page you recommended to migrate: a fix for each rule it fails, or why a failure can't be fixed, " +
+          "and rewrites that bring the page in line with the AI guidelines below. Read the page with get_page first.",
+        "Each fix or rewrite replaces one passage: give the passage exactly as it is now, and its new text. " +
+          "The server checks each change on its own: a fix must make its rule pass, and no change may make another rule fail. " +
+          "A change that fails is kept for the audit trail but not shown to the editor. Each failing rule gets two tries.",
+        "Call it once for every page you recommended to migrate, with no changes if there is nothing to change. " +
+          "The editor accepts, edits or rejects each change.",
+        "AI guidelines:",
+        ...guidelines.map((g) => `- ${g.guideline}`),
+      ].join("\n"),
+      inputSchema: z.object({
+        page: z.number().int().describe(`The page's number in the batch, from 1 to ${pages.length}.`),
+        changes: z.array(
+          z.object({
+            kind: z.enum(["fix", "cannot_fix", "rewrite"]),
+            ruleId: z.string().optional().describe("For a fix or cannot_fix: the failing rule's id, as check_page gives it."),
+            original: z.string().optional().describe("For a fix or rewrite: the passage exactly as it is now."),
+            proposed: z.string().optional().describe("For a fix or rewrite: the passage's new text."),
+            reason: z.string().optional().describe("Why, in plain English for the editor. Required for cannot_fix."),
+          }),
+        ),
+      }),
+    },
+    async ({ page: id, changes }): Promise<CallToolResult> => {
+      const page = pages.find((p) => p.meta.id === id);
+      if (!page) return notInBatch(id);
+      const saved = await getCopyPage(db, editor, id);
+      if (!saved) return error("The batch isn't open yet. Call open_batch first.");
+      if (saved.status.startsWith("approved_")) return error(`The editor has already decided page ${id}.`);
+      if (saved.outcome?.outcome !== "migrate") {
+        return error(
+          saved.outcome
+            ? `Page ${id} is recommended to ${saved.outcome.outcome}, so it gets no fixes or rewrites.`
+            : `Recommend an outcome for page ${id} first.`,
+        );
+      }
+
+      const text = saved.body;
+      const failing = runRules(page, text).failures.map((f) => f.ruleId);
+      const tries = new Map<string, number>();
+      for (const c of await getChanges(db, editor, id)) if (c.kind === "fix") tries.set(c.ruleId!, (tries.get(c.ruleId!) ?? 0) + 1);
+
+      const report: string[] = [];
+      for (const { kind, ruleId, original, proposed, reason } of changes) {
+        const label = kind === "rewrite" ? `Rewrite of "${original?.slice(0, 40)}…"` : `${kind === "fix" ? "Fix" : "No fix"} for ${ruleId}`;
+        if (kind !== "rewrite" && !failing.includes(ruleId!)) {
+          report.push(`${label}: refused, page ${id} doesn't fail that rule.`);
+          continue;
+        }
+        if (kind === "cannot_fix") {
+          if (!reason) {
+            report.push(`${label}: refused, say why it can't be fixed.`);
+            continue;
+          }
+          await recordChange(db, editor, id, { kind, ruleId, reason }, [], RULES_VERSION);
+          report.push(`${label}: stored. The page needs a manual fix.`);
+          continue;
+        }
+        if (!original || proposed === undefined || text.split(original).length !== 2) {
+          report.push(`${label}: refused, the passage must appear exactly once in the page.`);
+          continue;
+        }
+        const attempt = kind === "fix" ? (tries.get(ruleId!) ?? 0) + 1 : undefined;
+        if (attempt && attempt > 2) {
+          report.push(`${label}: refused, both tries are used. The page needs a manual fix.`);
+          continue;
+        }
+        if (attempt) tries.set(ruleId!, attempt);
+        // Checked against the rule it fixes and every rule that passed before, so earlier failures don't count against it.
+        const checks = runRules(page, text.split(original).join(proposed))
+          .results.filter((r) => r.ruleId === ruleId || !failing.includes(r.ruleId))
+          .map(({ ruleId, passed, reason }) => ({ ruleId, passed, reason }));
+        await recordChange(db, editor, id, { kind, ruleId, attempt, original, proposed, reason }, checks, RULES_VERSION);
+        const broken = checks.filter((c) => !c.passed).map((c) => c.reason);
+        report.push(broken.length ? `${label}: failed the rules, not shown to the editor. ${broken.join(" ")}` : `${label}: passed.`);
+      }
+
+      const status = statusAfterChanges(failing, await getChanges(db, editor, id));
+      await setStatus(db, editor, id, status);
+      report.push(`Page ${id} is now "${STATUS_LABELS[status]}".`);
+      return { content: [{ type: "text", text: report.join("\n") }] };
+    },
+  );
+
+  // Panel only: the AI can't see or call it.
   registerAppTool(
     server,
     "get_progress",
@@ -194,23 +311,28 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
     async (): Promise<CallToolResult> => ({ content: [], structuredContent: toBatch(await getProgress(db, editor)) }),
   );
 
-  registerAppTool(
-    server,
+  server.registerTool(
     "get_page",
     {
       title: "Get page",
-      description: "Returns one page of the editor's copy in full: its text, status, rule results and recommended outcome. Panel only.",
-      inputSchema: z.object({ page: z.number().int() }),
+      description:
+        "Returns one page of the editor's copy in full: its text, status, rule failures, recommended outcome, " +
+        "and the AI's changes that passed the rules.",
+      inputSchema: z.object({ page: z.number().int().describe(`The page's number in the batch, from 1 to ${pages.length}.`) }),
       outputSchema: PageDetail,
-      _meta: { ui: { visibility: ["app"] } },
+      annotations: { readOnlyHint: true },
     },
     async ({ page: id }): Promise<CallToolResult> => {
       const page = pages.find((p) => p.meta.id === id);
       const saved = page && (await getCopyPage(db, editor, id));
       if (!page || !saved) return notInBatch(id);
       const { title, type, status, body, outcome } = saved;
-      const detail = { id, title, type, audience: page.meta.audience ?? "", status: STATUS_LABELS[status], text: body, outcome };
-      return { content: [], structuredContent: { ...detail, ...runRules(page, body) } };
+      const { rulesChecked, failures } = runRules(page, body);
+      const changes = (await getChanges(db, editor, id))
+        .filter((c) => c.passed)
+        .map(({ id, kind, ruleId, original, proposed, reason }) => ({ id, kind, ruleId, original, proposed, reason }));
+      const detail = { id, title, type, audience: page.meta.audience ?? "", status: STATUS_LABELS[status], text: body, outcome, rulesChecked, failures, changes };
+      return { content: [{ type: "text", text: JSON.stringify(detail) }], structuredContent: detail };
     },
   );
 
