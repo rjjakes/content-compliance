@@ -1,0 +1,145 @@
+/* The panel uses the host's colours, fonts, corners and borders (docs/spec.md, "How it looks").
+   The values here are fallbacks for a host that sends none. */
+:root {
+  color-scheme: light dark;
+  --color-text-primary: light-dark(#1f2937, #f3f4f6);
+  --color-text-secondary: light-dark(#4b5563, #9ca3af);
+  --color-background-secondary: light-dark(#f3f4f6, #262626);
+  --color-border-primary: light-dark(#d1d5db, #404040);
+  --border-radius-md: 6px;
+  --border-width-regular: 1px;
+  --font-sans: ui-sans-serif, system-ui, sans-serif;
+  --font-mono: ui-monospace, SFMono-Regular, Menlo, monospace;
+  --font-weight-normal: 400;
+  --font-weight-semibold: 600;
+  --font-text-sm-size: 0.875rem;
+  --font-text-md-size: 1rem;
+  --font-heading-md-size: 1rem;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+/* Transparent, so the conversation shows through. */
+html,
+body {
+  margin: 0;
+  background: transparent;
+  color: var(--color-text-primary);
+  font-family: var(--font-sans);
+  font-size: var(--font-text-md-size);
+}
+
+/* The host's safe area comes on top of the panel's own padding, never instead of it. */
+main {
+  padding: calc(12px + var(--inset-top, 0px)) calc(16px + var(--inset-right, 0px))
+    calc(12px + var(--inset-bottom, 0px)) calc(16px + var(--inset-left, 0px));
+}
+
+h1 {
+  margin: 0 0 12px;
+  font-size: var(--font-heading-md-size);
+  font-weight: var(--font-weight-semibold);
+}
+
+p {
+  margin: 0;
+}
+
+.card {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.muted {
+  color: var(--color-text-secondary);
+  font-size: var(--font-text-sm-size);
+}
+
+/* At least 44px tall, the touch target size in Claude's MCP Apps design guidelines. */
+button {
+  min-height: 44px;
+  padding: 6px 14px;
+  border: var(--border-width-regular) solid var(--color-border-primary);
+  border-radius: var(--border-radius-md);
+  background: var(--color-background-secondary);
+  color: var(--color-text-primary);
+  font: inherit;
+  font-weight: var(--font-weight-semibold);
+  cursor: pointer;
+}
+
+h2 {
+  margin: 0 0 4px;
+  font-size: var(--font-heading-md-size);
+  font-weight: var(--font-weight-semibold);
+}
+
+h3 {
+  margin: 20px 0 8px;
+  font-size: var(--font-text-md-size);
+  font-weight: var(--font-weight-semibold);
+}
+
+.prepare {
+  margin-bottom: 16px;
+}
+
+/* The review pane's list view. */
+.page-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.page-list li {
+  border-bottom: var(--border-width-regular) solid var(--color-border-primary);
+}
+
+.page-list li:last-child {
+  border-bottom: none;
+}
+
+.page-list button {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  width: 100%;
+  padding: 8px;
+  border: none;
+  border-radius: var(--border-radius-md);
+  background: transparent;
+  font-weight: var(--font-weight-normal);
+  text-align: left;
+}
+
+.page-list button:hover {
+  background: var(--color-background-secondary);
+}
+
+.failures {
+  margin: 0;
+  padding-left: 20px;
+}
+
+.failures li + li {
+  margin-top: 6px;
+}
+
+.page-text {
+  margin: 0;
+  padding: 12px;
+  border-radius: var(--border-radius-md);
+  background: var(--color-background-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--font-text-sm-size);
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+}
+
+.back {
+  margin-bottom: 12px;
+}

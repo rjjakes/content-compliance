@@ -42,8 +42,8 @@ One panel does all the work. It opens once and stays open while the editor and t
 - If the AI calls `open_batch` again, the older copies grey out, stop sending anything to the AI, and point to the newest one. The server numbers each copy from the database, so every device agrees which is newest.
 
 ### The review pane
-- The pages are listed down the side, each with its status and recommended outcome. The selected page fills the rest: Must fix, AI suggests, the page text, the recommended outcome and the page's audit trail.
-- On a narrow screen, the list and the page take turns.
+- The pane has two views, each filling the pane: the list of pages, and a single page. The pane beside the conversation is narrow, so it is laid out as for a phone.
+- The list view shows each page with its status and recommended outcome. Choosing a page opens the page view: Must fix, AI suggests, the page text, the recommended outcome and the page's audit trail. Its Back button returns to the list view.
 - Details open in place, with no pop-ups, menus or floating windows.
 - Its actions are "Prepare for review", "Check your own text" and "Reset".
 - Controls stay inside the area the host marks as safe, so the message box never covers them.
@@ -89,7 +89,7 @@ A small secondary option lets the editor paste their own text. The rules check i
 ## Tools (proposed)
 Only one tool opens the panel. The AI's tools have no panel of their own. The panel's tools are hidden from the AI.
 - `open_batch`: opens the panel on the batch, and numbers this copy of the panel.
-- `check_page` (AI and panel): runs the fixed rules on a page and returns failures with reasons.
+- `check_page` (AI and panel): runs the fixed rules on a page and returns failures with reasons. It also runs the duplicate check: whether the page's text is identical to another page in the batch.
 - `recommend_outcome` (AI): takes the AI's migrate, retire or redirect recommendation and its reason, confirms a redirect target exists, and stores it.
 - `propose_fixes` (AI): takes the AI's fixes and rewrites, checks each against the rules, and stores those that pass. Each failure gets two tries. Refuses fixes for a page recommended for retire or redirect.
 - `get_progress` (panel): returns each page's status and recommended outcome, and what the AI is working on.

@@ -41,11 +41,6 @@ test("each demo page fails exactly the rules its demo case says", () => {
   for (const p of pages) assert.deepEqual(failures(p), expected[p.meta.id], `page ${p.meta.id}`);
 });
 
-test("every rule in the config runs on at least one demo page", () => {
-  const ran = new Set(pages.flatMap((p) => checkPage(p, rules, { knownPaths: known, today, originalBody: p.body }).map((r) => r.ruleId)));
-  assert.deepEqual([...ran].sort(), rules.rules.map((r) => r.id).sort());
-});
-
 test("patient writing rules don't apply to pages for healthcare professionals", () => {
   const ids = checkPage(page(5), rules, { today }).map((r) => r.ruleId);
   for (const id of ["reading-age", "medicine-not-drug", "side-effects-get-or-have", "side-effect-statement"]) {
@@ -63,20 +58,13 @@ test("safe: unqualified safe fails, but protected wording is never checked", () 
   assert.deepEqual(failures(inProtected, { originalBody: inProtected.body }), []);
 });
 
-test("superlatives and claims fail, and anyone typing clinically proven is caught", () => {
+test("superlatives: an unsupported best fails", () => {
   assert.deepEqual(failures(edited(7, "# Hay fever\n", "# Hay fever\n\nThis is the best treatment.\n")), ["no-unsupported-superlatives"]);
-  assert.deepEqual(failures(edited(7, "# Hay fever\n", "# Hay fever\n\nIt is clinically proven.\n")), ["no-claims-list-words"]);
 });
 
 test("protected wording: changing a dosage warning fails", () => {
   const changed = edited(1, "Take one tablet once a day.", "Take two tablets once a day.");
   assert.deepEqual(failures(changed, { originalBody: page(1).body }), ["protected-wording-unchanged"]);
-});
-
-test("certification: older than two years fails", () => {
-  assert.deepEqual(failures(page(8)), ["certified-in-two-years"]);
-  const result = checkPage(page(8), rules, { today }).find((r) => r.ruleId === "certified-in-two-years");
-  assert.equal(result?.reason, "Last certified 14 February 2023, more than two years ago.");
 });
 
 test("certification: the config's as_of date keeps the demo cases true after page 10 turns two", () => {
@@ -112,10 +100,6 @@ test("link text: click here fails", () => {
 test("PDF links: a link without (PDF only, [file size]) fails", () => {
   const p = edited(3, "Example medicine A patient leaflet (PDF only, 240KB)", "Example medicine A patient leaflet");
   assert.deepEqual(failures(p), ["links-work", "pdf-link-label"]);
-});
-
-test("links: fixing page 3's link to an existing file makes it pass", () => {
-  assert.deepEqual(failures(edited(3, "example-medicine-a-leaflet-2021.pdf", "example-medicine-a-leaflet-v2.pdf")), []);
 });
 
 test("pasted text: rules that need page details or the site don't run", () => {

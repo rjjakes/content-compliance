@@ -49,7 +49,9 @@ Tagline: **AI proposes, people decide.**
 
 ## Running locally
 - Postgres: copy `.env.example` to `.env` and set a password, then run `docker compose up -d --wait`. It listens on `127.0.0.1:5433`.
-- Code: run `npm install`, then `npm test` for the tests and `npm run typecheck` to check types. Node runs the TypeScript directly.
+- Code: run `npm install`, then `npm test` for the tests and `npm run typecheck` to check types. Node runs the TypeScript directly. The server tests use the database in `.env`, inside a transaction they roll back, so Postgres must be running with the schema applied.
+- Server: `npm start` builds the panel into `dist/` and runs the MCP server at `http://localhost:3001/mcp`. Claude Desktop connects to it through `mcp-remote`: an entry in its MCP servers config with `"command": "npx"` and `"args": ["-y", "mcp-remote@0.15.2", "http://localhost:3001/mcp"]`. Restart Claude Desktop after changing the config.
+- Working on the panel: `npm run dev` rebuilds the panel on every save and restarts the server when the server code, config or content changes. Claude Desktop fetches the panel once per connection and keeps it, so it shows changes only after a restart. To see them straight away, use `basic-host`, the reference test host from ext-apps (`docs/testing-mcp-apps.md`), which fetches the panel on every call. If `private/tools/basic-host/` exists locally, it is a built copy: run `HOST_PORT=8090 SERVERS='["http://localhost:3001/mcp"]' node serve.ts` there, open `http://localhost:8090`, call `open_batch`, and reload the page after each change.
 - On a new database, apply the schema once: `docker exec -i content-compliance-postgres psql -U compliance -d compliance -v ON_ERROR_STOP=1 < db/schema.sql`.
 
 ## Handoff
