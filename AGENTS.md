@@ -60,10 +60,6 @@ Every commit message follows [Conventional Commits 1.0.0](https://www.convention
 
 ```
 <type>[optional scope]: <description>
-
-[optional body]
-
-[optional footer(s)]
 ```
 
 `feat` adds a feature and `fix` fixes a bug. Other types such as `build`, `chore`, `ci`, `docs`, `refactor`, `perf`, `style` and `test` are allowed. Mark a breaking change with `!` before the colon or a `BREAKING CHANGE:` footer.
