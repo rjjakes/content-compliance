@@ -5,12 +5,14 @@ import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport, type CallToolResult } from "@modelcontextprotocol/server";
 import { loadPages } from "./content.ts";
-import { connect, loadBatch } from "./db.ts";
+import pg from "pg";
+import { clientDb, loadBatch } from "./db.ts";
 import { createServer } from "./server.ts";
 
-const pool = connect();
-const db = await pool.connect();
-await db.query("BEGIN");
+const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
+const connection = await pool.connect();
+await connection.query("BEGIN");
+const db = clientDb(connection);
 await loadBatch(db, loadPages());
 
 const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
@@ -20,8 +22,8 @@ await client.connect(clientSide);
 
 after(async () => {
   await client.close();
-  await db.query("ROLLBACK");
-  db.release();
+  await connection.query("ROLLBACK");
+  connection.release();
   await pool.end();
 });
 

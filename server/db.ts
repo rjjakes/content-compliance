@@ -5,12 +5,66 @@ import type { ContentPage } from "./content.ts";
 import type { PageMeta } from "./rules.ts";
 import type { Outcome } from "./schemas.ts";
 
-/** A connection pool, or one client inside a transaction (as the tests use). */
-export type Db = Pick<pg.Pool, "query">;
+/** Runs queries, and runs a function inside a transaction. Backed by a pool, or by one client. */
+export interface Db {
+  query: pg.Pool["query"];
+  transaction<T>(fn: (tx: Db) => Promise<T>): Promise<T>;
+}
 
-export function connect(url = process.env.DATABASE_URL): pg.Pool {
+export function connect(url = process.env.DATABASE_URL): Db {
   if (!url) throw new Error("DATABASE_URL is not set. Copy .env.example to .env.");
-  return new pg.Pool({ connectionString: url });
+  return poolDb(new pg.Pool({ connectionString: url }));
+}
+
+function poolDb(pool: pg.Pool): Db {
+  return {
+    query: pool.query.bind(pool),
+    async transaction(fn) {
+      const client = await pool.connect();
+      try {
+        await client.query("BEGIN");
+        const result = await fn(clientDb(client));
+        await client.query("COMMIT");
+        return result;
+      } catch (error) {
+        await client.query("ROLLBACK");
+        throw error;
+      } finally {
+        client.release();
+      }
+    },
+  };
+}
+
+/** One client, already inside a transaction. A nested transaction is a savepoint, so the tests can roll everything back. */
+export function clientDb(client: pg.PoolClient, depth = 0): Db {
+  return {
+    query: client.query.bind(client) as pg.Pool["query"],
+    async transaction(fn) {
+      const savepoint = `sp${depth}`;
+      await client.query(`SAVEPOINT ${savepoint}`);
+      try {
+        const result = await fn(clientDb(client, depth + 1));
+        await client.query(`RELEASE SAVEPOINT ${savepoint}`);
+        return result;
+      } catch (error) {
+        await client.query(`ROLLBACK TO SAVEPOINT ${savepoint}`);
+        throw error;
+      }
+    },
+  };
+}
+
+/** Locks one page of the editor's copy until the transaction ends, so two writers take turns. */
+export async function lockPage(tx: Db, externalId: string, pageId: number): Promise<void> {
+  await tx.query(
+    `SELECT 1 FROM editors e
+     JOIN copies c ON c.editor_id = e.id AND c.reset_at IS NULL
+     JOIN copy_pages cp ON cp.copy_id = c.id
+     WHERE e.external_id = $1 AND cp.page_id = $2
+     FOR UPDATE OF cp`,
+    [externalId, pageId],
+  );
 }
 
 /** Until testers can be told apart, everyone is this one local editor. */
