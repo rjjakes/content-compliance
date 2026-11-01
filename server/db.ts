@@ -2,6 +2,7 @@
 import pg from "pg";
 import type { z } from "zod";
 import type { ContentPage } from "./content.ts";
+import type { PageMeta } from "./rules.ts";
 import type { Outcome } from "./schemas.ts";
 
 /** A connection pool, or one client inside a transaction (as the tests use). */
@@ -37,6 +38,8 @@ export interface CopyPage {
 }
 
 export interface CopyPageDetail extends CopyPage {
+  /** What the rules need to know about the page: audience, medicine, certification date and path. */
+  meta: PageMeta;
   /** The last saved text. */
   body: string;
   /** The text as imported. */
@@ -107,9 +110,22 @@ export async function getProgress(db: Db, externalId: string): Promise<CopyPage[
 /** One page of the editor's open copy, or nothing if the page isn't in it. */
 export async function getCopyPage(db: Db, externalId: string, pageId: number): Promise<CopyPageDetail | undefined> {
   const sql = `SELECT ${COLUMNS}, cp.body, p.body AS "originalBody",
+    json_strip_nulls(json_build_object('audience', p.audience, 'medicine', p.medicine, 'certified', p.certified::text, 'path', p.path)) AS meta,
     (SELECT max(d.id)::int FROM decisions d WHERE d.copy_id = c.id AND d.page_id = p.id AND d.action = 'save') AS "lastSave"
     ${OPEN_COPY} AND p.id = $2`;
   return (await db.query<CopyPageDetail>(sql, [externalId, pageId])).rows[0];
+}
+
+/** Every path a link on the site may point to: the batch's pages, plus the site's other files. */
+export async function knownPaths(db: Db, siteFiles: string[]): Promise<Set<string>> {
+  const result = await db.query<{ path: string }>("SELECT path FROM pages");
+  return new Set([...siteFiles, ...result.rows.map((r) => r.path)]);
+}
+
+/** The triage check for exact duplicates: the other pages in the batch whose text as imported is identical. */
+export async function findDuplicates(db: Db, pageId: number, text: string): Promise<number[]> {
+  const result = await db.query<{ id: number }>("SELECT id FROM pages WHERE id <> $1 AND body = $2 ORDER BY id", [pageId, text]);
+  return result.rows.map((r) => r.id);
 }
 
 // The editor's open copy of one page ($1 the editor, $2 the page), as the start of a statement.

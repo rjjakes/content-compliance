@@ -6,10 +6,10 @@ import { readFile } from "node:fs/promises";
 import { registerAppResource, registerAppTool, RESOURCE_MIME_TYPE } from "@modelcontextprotocol/ext-apps/server";
 import { McpServer, type CallToolResult, type ReadResourceResult } from "@modelcontextprotocol/server";
 import { z } from "zod";
-import { knownPaths, loadPages, loadSiteFiles, type ContentPage } from "./content.ts";
+import { loadSiteFiles } from "./content.ts";
 import {
-  getChanges, getCopyPage, getProgress, LOCAL_EDITOR, logPageChecks, openCopy, recordChange, recordDecision, recordOutcome, setStatus,
-  STATUS_LABELS, type CopyPage, type CopyPageDetail, type Db, type StoredChange,
+  findDuplicates, getChanges, getCopyPage, getProgress, knownPaths, LOCAL_EDITOR, logPageChecks, openCopy, recordChange, recordDecision,
+  recordOutcome, setStatus, STATUS_LABELS, type CopyPage, type CopyPageDetail, type Db, type StoredChange,
 } from "./db.ts";
 import { loadGuidelines } from "./guidelines.ts";
 import { checkPage, loadRules } from "./rules.ts";
@@ -20,8 +20,8 @@ const rules = loadRules(RULES_FILE);
 /** Which version of the rules config ran, stored with every logged check. */
 const RULES_VERSION = createHash("sha256").update(readFileSync(RULES_FILE)).digest("hex").slice(0, 12);
 const guidelines = loadGuidelines();
-const pages = loadPages();
-const known = knownPaths(pages, loadSiteFiles());
+/** The site's files that aren't pages, for the links rule. The pages themselves come from the database. */
+const siteFiles = loadSiteFiles();
 
 const PANEL_URI = "ui://content-compliance/panel.html";
 const PANEL_FILE = new URL("../dist/mcp-app.html", import.meta.url);
@@ -47,11 +47,11 @@ async function panelHtml(): Promise<string> {
 }
 
 /** Runs the fixed rules on a page's text, against the page as imported. Checks are the results as the audit trail stores them. */
-function runRules(page: ContentPage, text: string) {
-  const results = checkPage({ meta: page.meta, body: text }, rules, { originalBody: page.body, knownPaths: known });
+function runRules(page: CopyPageDetail, text: string, known: Set<string>) {
+  const results = checkPage({ meta: page.meta, body: text }, rules, { originalBody: page.originalBody, knownPaths: known });
   const failures = results.filter((r) => !r.passed).map((r) => ({ ruleId: r.ruleId, name: r.name, reason: r.reason! }));
   const checks = results.map(({ ruleId, passed, reason }) => ({ ruleId, passed, reason }));
-  return { results, checks, rulesChecked: results.length, failures };
+  return { checks, rulesChecked: results.length, failures };
 }
 
 /** The page text with the changes the editor has accepted since the last save applied. */
@@ -77,9 +77,6 @@ function statusAfterChanges(failing: string[], changes: StoredChange[]): string 
   return open.some(givenUp) ? "needs_manual_fix" : "candidate";
 }
 
-/** The triage check for exact duplicates: other pages in the batch with the same text. */
-const duplicatesOf = (id: number, text: string) => pages.filter((p) => p.meta.id !== id && p.body === text).map((p) => p.meta.id);
-
 /** The batch as the panel shows it: status labels, and how many pages are decided. */
 function toBatch(copyPages: CopyPage[]) {
   return {
@@ -92,7 +89,8 @@ function toBatch(copyPages: CopyPage[]) {
 const outcomeText = (o: z.infer<typeof Outcome>) => (o.target ? `${o.outcome} to page ${o.target}` : o.outcome);
 
 const error = (text: string): CallToolResult => ({ isError: true, content: [{ type: "text", text }] });
-const notInBatch = (id: number) => error(`There is no page ${id}. The batch has pages 1 to ${pages.length}.`);
+const notOpen = (id: number) => error(`Page ${id} isn't in the open batch. Call open_batch first.`);
+const PAGE_NUMBER = z.number().int().describe("The page's number in the batch.");
 
 export interface ServerOptions {
   db: Db;
@@ -103,6 +101,12 @@ export interface ServerOptions {
 /** A new server for each request: nothing is kept in memory between requests. */
 export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpServer {
   const server = new McpServer({ name: "Content compliance", version: "0.1.0" });
+
+  // The paths links may point to, loaded once per request.
+  let knownPromise: Promise<Set<string>> | undefined;
+  const known = () => (knownPromise ??= knownPaths(db, siteFiles));
+  /** The fixed rules on a page's text. */
+  const check = async (page: CopyPageDetail, text: string) => runRules(page, text, await known());
 
   registerAppTool(
     server,
@@ -145,7 +149,7 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
         "Give text to check a changed version of the page against the same rules. " +
         "Without text, it checks the page as the editor's copy holds it, and the results go into the audit trail.",
       inputSchema: z.object({
-        page: z.number().int().describe(`The page's number in the batch, from 1 to ${pages.length}.`),
+        page: PAGE_NUMBER,
         text: z.string().optional().describe("The page's text after changes, in Markdown. Leave it out to check the page as it is now."),
       }),
       outputSchema: z.object({
@@ -157,14 +161,13 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
       }),
     },
     async ({ page: id, text }): Promise<CallToolResult> => {
-      const page = pages.find((p) => p.meta.id === id);
-      if (!page) return notInBatch(id);
-      const saved = await getCopyPage(db, editor, id);
-      const body = text ?? saved?.body ?? page.body;
-      const { checks, rulesChecked, failures } = runRules(page, body);
-      if (text === undefined && saved) await logPageChecks(db, editor, id, checks, RULES_VERSION);
-      const duplicateOf = duplicatesOf(id, body);
-      const heading = `Page ${id}, ${page.meta.type}, ${page.meta.title}:`;
+      const page = await getCopyPage(db, editor, id);
+      if (!page) return notOpen(id);
+      const body = text ?? page.body;
+      const { checks, rulesChecked, failures } = await check(page, body);
+      if (text === undefined) await logPageChecks(db, editor, id, checks, RULES_VERSION);
+      const duplicateOf = await findDuplicates(db, id, body);
+      const heading = `Page ${id}, ${page.type}, ${page.title}:`;
       const summary = failures.length
         ? [`${heading} ${failures.length} of ${rulesChecked} rules fail.`, ...failures.map((f) => `- ${f.name}: ${f.reason}`)]
         : [`${heading} all ${rulesChecked} rules pass.`];
@@ -173,7 +176,7 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
       }
       return {
         content: [{ type: "text", text: summary.join("\n") }],
-        structuredContent: { page: id, title: page.meta.title, rulesChecked, failures, duplicateOf },
+        structuredContent: { page: id, title: page.title, rulesChecked, failures, duplicateOf },
       };
     },
   );
@@ -187,7 +190,7 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
         "A redirect names the page to redirect to, which must be another page in the batch. " +
         "Check the page with check_page first. The editor makes the final decision in the panel.",
       inputSchema: z.object({
-        page: z.number().int().describe(`The page's number in the batch, from 1 to ${pages.length}.`),
+        page: PAGE_NUMBER,
         outcome: z.enum(["migrate", "retire", "redirect"]),
         reason: z.string().min(1).describe("Why, in a sentence or two, in plain English for the editor."),
         target: z.number().int().optional().describe("For a redirect only: the number of the page to redirect to."),
@@ -195,14 +198,13 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
       outputSchema: z.object({ page: z.number(), outcome: Outcome, status: z.string() }),
     },
     async ({ page: id, outcome, reason, target }): Promise<CallToolResult> => {
-      if (!pages.some((p) => p.meta.id === id)) return notInBatch(id);
       const saved = await getCopyPage(db, editor, id);
-      if (!saved) return error("The batch isn't open yet. Call open_batch first.");
+      if (!saved) return notOpen(id);
       if (saved.status.startsWith("approved_")) return error(`The editor has already decided page ${id}, so its outcome can't change.`);
       if (outcome === "redirect") {
         if (target === undefined) return error("A redirect needs a target: the number of the page to redirect to.");
         if (target === id) return error("A page can't redirect to itself.");
-        if (!pages.some((p) => p.meta.id === target)) return error(`Page ${target} isn't in the batch, so it can't be a redirect target.`);
+        if (!(await getCopyPage(db, editor, target))) return error(`Page ${target} isn't in the batch, so it can't be a redirect target.`);
       } else if (target !== undefined) {
         return error("Only a redirect has a target.");
       }
@@ -232,7 +234,7 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
         ...guidelines.map((g) => `- ${g.guideline}`),
       ].join("\n"),
       inputSchema: z.object({
-        page: z.number().int().describe(`The page's number in the batch, from 1 to ${pages.length}.`),
+        page: PAGE_NUMBER,
         changes: z.array(
           z.object({
             kind: z.enum(["fix", "cannot_fix", "rewrite"]),
@@ -245,10 +247,8 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
       }),
     },
     async ({ page: id, changes }): Promise<CallToolResult> => {
-      const page = pages.find((p) => p.meta.id === id);
-      if (!page) return notInBatch(id);
       const saved = await getCopyPage(db, editor, id);
-      if (!saved) return error("The batch isn't open yet. Call open_batch first.");
+      if (!saved) return notOpen(id);
       if (saved.status.startsWith("approved_")) return error(`The editor has already decided page ${id}.`);
       if (saved.outcome?.outcome !== "migrate") {
         return error(
@@ -259,7 +259,7 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
       }
 
       const text = saved.body;
-      const failing = runRules(page, text).failures.map((f) => f.ruleId);
+      const failing = (await check(saved, text)).failures.map((f) => f.ruleId);
       const tries = new Map<string, number>();
       for (const c of await getChanges(db, editor, id)) if (c.kind === "fix") tries.set(c.ruleId!, (tries.get(c.ruleId!) ?? 0) + 1);
 
@@ -290,7 +290,7 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
         }
         if (attempt) tries.set(ruleId!, attempt);
         // Checked against the rule it fixes and every rule that passed before, so earlier failures don't count against it.
-        const checks = runRules(page, text.split(original).join(proposed)).checks.filter(
+        const checks = (await check(saved, text.split(original).join(proposed))).checks.filter(
           (c) => c.ruleId === ruleId || !failing.includes(c.ruleId),
         );
         await recordChange(db, editor, id, { kind, ruleId, attempt, original, proposed, reason }, checks, RULES_VERSION);
@@ -324,9 +324,8 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
       _meta: { ui: { visibility: ["app"] } },
     },
     async ({ page: id, action, changeId, target, note }): Promise<CallToolResult> => {
-      const page = pages.find((p) => p.meta.id === id);
-      const saved = page && (await getCopyPage(db, editor, id));
-      if (!page || !saved) return notInBatch(id);
+      const saved = await getCopyPage(db, editor, id);
+      if (!saved) return notOpen(id);
       if (saved.status.startsWith("approved_")) return error(`Page ${id} is already decided.`);
       const changes = await getChanges(db, editor, id);
       const text = workingText(saved, changes);
@@ -339,16 +338,16 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
       } else if (action === "save") {
         if (text === saved.body) return error("There are no changes to save.");
         const decision = { action, originalText: saved.body, finalText: text, note };
-        await recordDecision(db, editor, id, decision, { body: text }, runRules(page, text).checks, RULES_VERSION);
+        await recordDecision(db, editor, id, decision, { body: text }, (await check(saved, text)).checks, RULES_VERSION);
       } else if (action === "migrate") {
         if (text !== saved.body) return error("Save your changes first.");
-        const { checks, failures } = runRules(page, saved.body);
+        const { checks, failures } = await check(saved, saved.body);
         if (failures.length) return error("A page can migrate only when every rule passes.");
         await recordDecision(db, editor, id, { action, note }, { status: "approved_migrate" }, checks, RULES_VERSION);
       } else if (action === "retire") {
         await recordDecision(db, editor, id, { action, note }, { status: "approved_retire" }, [], RULES_VERSION);
       } else {
-        if (target === undefined || target === id || !pages.some((p) => p.meta.id === target)) {
+        if (target === undefined || target === id || !(await getCopyPage(db, editor, target))) {
           return error("A redirect needs a target: another page in the batch.");
         }
         await recordDecision(db, editor, id, { action, targetPageId: target, note }, { status: "approved_redirect" }, [], RULES_VERSION);
@@ -377,24 +376,23 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
       description:
         "Returns one page of the editor's copy in full: its text, status, rule failures, recommended outcome, " +
         "and the AI's changes that passed the rules.",
-      inputSchema: z.object({ page: z.number().int().describe(`The page's number in the batch, from 1 to ${pages.length}.`) }),
+      inputSchema: z.object({ page: PAGE_NUMBER }),
       outputSchema: PageDetail,
       annotations: { readOnlyHint: true },
     },
     async ({ page: id }): Promise<CallToolResult> => {
-      const page = pages.find((p) => p.meta.id === id);
-      const saved = page && (await getCopyPage(db, editor, id));
-      if (!page || !saved) return notInBatch(id);
+      const saved = await getCopyPage(db, editor, id);
+      if (!saved) return notOpen(id);
       const { title, type, status, body, outcome } = saved;
       const stored = await getChanges(db, editor, id);
       const text = workingText(saved, stored);
-      const { rulesChecked, failures } = runRules(page, body);
+      const { rulesChecked, failures } = await check(saved, body);
       const changes = stored
         .filter((c) => c.passed)
         .map(({ id, kind, ruleId, original, proposed, reason, decision }) => ({ id, kind, ruleId, original, proposed, reason, decision }));
       const detail = {
-        id, title, type, audience: page.meta.audience ?? "", status: STATUS_LABELS[status], text, outcome, rulesChecked, failures, changes,
-        unsaved: text !== body, pendingFailures: text !== body ? runRules(page, text).failures : failures,
+        id, title, type, audience: saved.meta.audience ?? "", status: STATUS_LABELS[status], text, outcome, rulesChecked, failures, changes,
+        unsaved: text !== body, pendingFailures: text !== body ? (await check(saved, text)).failures : failures,
       };
       return { content: [{ type: "text", text: JSON.stringify(detail) }], structuredContent: detail };
     },
