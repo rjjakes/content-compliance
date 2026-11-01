@@ -1,0 +1,140 @@
+# Fixed rules: pass or fail checks run by code, not by the AI.
+# The rules are explained in docs/CONTENT.md, "Fixed rules".
+#
+# Each rule names a check, which the code runs with the settings given here.
+# Another organisation can change the settings, the messages, or remove rules.
+# A new kind of check needs new code.
+#
+# "when" limits a rule to some pages:
+#   audience: patients     only pages for patients
+#   names_a_medicine: true only pages about a named medicine
+#
+# Rules about wording and reading age skip protected wording,
+# which sits between the two markers below and is approved as it stands.
+
+protected_wording:
+  start: "<!-- protected -->"
+  end: "<!-- /protected -->"
+
+rules:
+  # Regulated content (ABPI Code)
+
+  - id: side-effect-statement
+    name: Side-effect reporting statement
+    source: ABPI Code, clause 26.4
+    when: { audience: patients, names_a_medicine: true }
+    check: protected_text_includes
+    includes:
+      - "If you get any side effects, talk to your doctor"
+      - "Yellow Card"
+    message: The page is for patients taking a medicine, but it has no side-effect reporting statement.
+
+  - id: audience-stated
+    name: Intended audience stated
+    source: ABPI Code, clause 26.2
+    check: text_includes_one_of
+    phrases:
+      - "this page is for patients"
+      - "this page is for healthcare professionals"
+    message: The page does not say who it is for.
+
+  - id: no-unqualified-safe
+    name: No unqualified "safe" or "safety"
+    source: ABPI Code, clause 6.4
+    check: no_words
+    words: ["safe", "safety", "no side effects"]
+    message: Uses {words}.
+
+  - id: no-unsupported-superlatives
+    name: No unsupported "best", "strongest" or "unique"
+    source: ABPI Code, clause 14.4
+    check: no_words
+    words: ["best", "strongest", "unique"]
+    message: Uses {words} without substantiation.
+
+  - id: no-claims-list-words
+    name: Nothing from the claims list
+    source: ABPI Code, clauses 6.2 and 26.2
+    check: no_words
+    words: ["cures", "clinically proven", "proven to help"]
+    message: Uses {words}, which the claims list allows only with substantiation on the page.
+
+  - id: protected-wording-unchanged
+    name: Protected wording unchanged
+    source: ABPI Code
+    check: protected_wording_unchanged
+    message: Protected wording has changed.
+
+  - id: certified-in-two-years
+    name: Certified in the last two years
+    source: ABPI Code, clause 8
+    check: certified_within
+    years: 2
+    message: Last certified {date}, more than two years ago.
+
+  # Writing for patients (NHS content guide)
+
+  - id: reading-age
+    name: Reading age 11 or under
+    source: NHS content guide
+    when: { audience: patients }
+    check: reading_age
+    max: 11
+    message: The reading age is {age}.
+
+  - id: medicine-not-drug
+    name: '"Medicine", not "drug" or "medication"'
+    source: NHS content guide
+    when: { audience: patients }
+    check: no_words
+    words: ["drug", "drugs", "medication", "medications"]
+    message: Uses {words}.
+
+  - id: side-effects-get-or-have
+    name: People "get" or "have" side effects
+    source: NHS content guide
+    when: { audience: patients }
+    check: no_pattern
+    pattern: '\b(develop|experienc)\w*\b[^.]*side effects|side effects[^.]*\b(develop|experienc)'
+    message: Side effects are "developed" or "experienced".
+
+  # Structure and accessibility (WCAG 2.2 AA and NHS content guide)
+
+  - id: image-alt-text
+    name: Every informative image has alt text
+    source: WCAG 2.2, 1.1.1
+    check: image_alt_text
+    message: The image {image} has no alt text.
+
+  - id: headings
+    name: One main heading, sentence case, in order
+    source: WCAG 2.2, 1.3.1, and NHS content guide
+    check: headings
+    # Words that may keep a capital letter inside a heading.
+    allowed_capitals: [Example, A, B, C, GP, NHS, November, Yellow, Card, H1]
+    messages:
+      main_heading: The page needs exactly one main heading, at the top.
+      skipped_level: A heading level is skipped.
+      sentence_case: '"{heading}" is not in sentence case.'
+
+  - id: link-text
+    name: Link text makes sense on its own
+    source: WCAG 2.2, 2.4.4
+    check: link_text
+    banned_text:
+      contains: ["click here", "read more"]
+      exact: ["here", "more"]
+    message: '"{text}" does not make sense on its own.'
+
+  - id: pdf-link-label
+    name: PDF links labelled
+    source: NHS content guide
+    check: pdf_link_label
+    label: '\(PDF only, \d+(KB|MB)\)$'
+    message: '"{text}" should end with "(PDF only, [file size])".'
+
+  - id: links-work
+    name: Links work
+    source: NHS content guide
+    check: links_work
+    message: The link to {link} is broken.

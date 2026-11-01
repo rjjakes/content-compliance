@@ -11,7 +11,7 @@ The app helps an editor move a batch of pages to a new site. Each page is migrat
 - **Fixed rules.** Pass or fail checks a machine can run. For example: required wording, banned claims, preferred words, reading age, alt text, working links and certification dates. The rules check every page, every change the AI proposes and every edit the editor makes.
 - **AI guidelines.** What the migration is trying to achieve and how to write. For example: plain English, clear structure and a calm, factual voice. The AI follows them when it proposes changes. They never fail a page.
 
-Another organisation can swap in its own lists.
+Another organisation can swap in its own lists. The fixed rules are in `config/rules.yml`. Each rule names a check and its settings, such as a word list or the highest reading age allowed, so they can be changed without changing code.
 
 Two triage checks also run: one finds exact duplicates in the batch, and one confirms a redirect target exists. Their results inform the AI's recommendation. They never fail a page.
 

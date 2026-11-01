@@ -49,6 +49,7 @@ Tagline: **AI proposes, people decide.**
 
 ## Running locally
 - Postgres: copy `.env.example` to `.env` and set a password, then run `docker compose up -d --wait`. It listens on `127.0.0.1:5433`.
+- Code: run `npm install`, then `npm test` for the rule tests and `npm run typecheck` to check types. Node runs the TypeScript directly.
 - On a new database, apply the schema once: `docker exec -i content-compliance-postgres psql -U compliance -d compliance -v ON_ERROR_STOP=1 < db/schema.sql`.
 
 ## Handoff

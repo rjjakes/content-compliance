@@ -1,0 +1,21 @@
+{
+  "name": "content-compliance",
+  "private": true,
+  "type": "module",
+  "description": "An example MCP App: fixed rules decide what must be right, AI suggests fixes, a person decides.",
+  "license": "MIT",
+  "engines": {
+    "node": ">=24"
+  },
+  "scripts": {
+    "test": "node --test server/*.test.ts",
+    "typecheck": "tsc --noEmit"
+  },
+  "dependencies": {
+    "yaml": "^2.9.1"
+  },
+  "devDependencies": {
+    "@types/node": "^26.0.0",
+    "typescript": "^5.9.3"
+  }
+}
