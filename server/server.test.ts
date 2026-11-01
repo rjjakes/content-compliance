@@ -5,17 +5,25 @@ import { after, afterEach, beforeEach, test } from "node:test";
 import assert from "node:assert/strict";
 import { Client } from "@modelcontextprotocol/client";
 import { InMemoryTransport, type CallToolResult } from "@modelcontextprotocol/server";
-import pg from "pg";
+import postgres from "postgres";
 import { loadPages } from "./content.ts";
-import { clientDb, loadBatch } from "./db.ts";
+import { loadBatch, type Db } from "./db.ts";
 import type { Batch, PageDetail } from "./schemas.ts";
 import { createServer } from "./server.ts";
 import type { z } from "zod";
 
-const pool = new pg.Pool({ connectionString: process.env.DATABASE_URL });
-const connection = await pool.connect();
-await connection.query("BEGIN");
-const db = clientDb(connection);
+// One transaction, held open while the tests run and rolled back at the end.
+const sql = postgres(process.env.DATABASE_URL!);
+let finish!: () => void;
+const finished = new Promise<void>((resolve) => (finish = resolve));
+const transaction = new Promise<Db>((ready) => {
+  sql.begin(async (tx) => {
+    ready(tx);
+    await finished;
+    await tx.rollback();
+  });
+});
+const db = await transaction;
 await loadBatch(db, loadPages());
 
 const [clientSide, serverSide] = InMemoryTransport.createLinkedPair();
@@ -24,13 +32,16 @@ const client = new Client({ name: "test", version: "1.0.0" });
 await client.connect(clientSide);
 await client.callTool({ name: "open_batch", arguments: {} });
 
-beforeEach(() => connection.query("SAVEPOINT each_test"));
-afterEach(() => connection.query("ROLLBACK TO SAVEPOINT each_test"));
+beforeEach(async () => {
+  await db`SAVEPOINT each_test`;
+});
+afterEach(async () => {
+  await db`ROLLBACK TO SAVEPOINT each_test`;
+});
 after(async () => {
   await client.close();
-  await connection.query("ROLLBACK");
-  connection.release();
-  await pool.end();
+  finish();
+  await sql.end();
 });
 
 /** Calls a tool and returns its result, with the structured content typed as T. */
@@ -46,11 +57,12 @@ const decide = (page: number, decision: Record<string, unknown>) => call("record
 /** The passing fix for page 2's claims-list failure, as the AI would propose it. */
 const PAGE_2_FIX = { kind: "fix", ruleId: "no-claims-list-words", original: "It is clinically proven to soothe itching", proposed: "It can soothe itching" };
 
-/** How many check results the test editor's copy holds, for the given page or for all pages. */
-async function loggedChecks(where = "true") {
-  const sql = `SELECT count(*)::int AS n FROM check_results cr JOIN copies c ON c.id = cr.copy_id JOIN editors e ON e.id = c.editor_id
-               WHERE e.external_id = 'test' AND ${where}`;
-  return (await db.query(sql)).rows[0].n as number;
+/** How many check results the test editor's copy holds, for all pages or for one page and kind of check. */
+async function loggedChecks(pageId?: number, ranOn?: string) {
+  const [row] = await db<{ n: number }[]>`
+    SELECT count(*)::int AS n FROM check_results cr JOIN copies c ON c.id = cr.copy_id JOIN editors e ON e.id = c.editor_id
+    WHERE e.external_id = 'test' ${pageId === undefined ? db`` : db`AND cr.page_id = ${pageId} AND cr.ran_on = ${ranOn!}`}`;
+  return row.n;
 }
 
 test("open_batch: opens the editor's copy of the batch with every page a candidate", async () => {
@@ -75,7 +87,7 @@ test("check_page: the duplicate check matches page 9 with page 6, but not page 8
 
 test("check_page: the results go into the audit trail", async () => {
   await call("check_page", { page: 2 });
-  assert.ok((await loggedChecks("cr.page_id = 2 AND cr.ran_on = 'page'")) > 0);
+  assert.ok((await loggedChecks(2, "page")) > 0);
 });
 
 test("recommend_outcome: each outcome sets the page's status, and the panel sees it", async () => {

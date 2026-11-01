@@ -8,8 +8,8 @@ import { McpServer, type CallToolResult, type ReadResourceResult } from "@modelc
 import { z } from "zod";
 import { loadSiteFiles } from "./content.ts";
 import {
-  findDuplicates, getChanges, getCopyPage, getProgress, knownPaths, LOCAL_EDITOR, lockPage, logPageChecks, openCopy, recordChange,
-  recordDecision, recordOutcome, setStatus, STATUS_LABELS, type CopyPage, type CopyPageDetail, type Db, type StoredChange,
+  findDuplicates, getChanges, getCopyPage, getProgress, knownPaths, LOCAL_EDITOR, logPageChecks, openCopy, recordChange, recordDecision,
+  recordOutcome, setStatus, STATUS_LABELS, type CopyPage, type CopyPageDetail, type Db, type StoredChange,
 } from "./db.ts";
 import { loadGuidelines } from "./guidelines.ts";
 import { checkPage, loadRules } from "./rules.ts";
@@ -168,7 +168,7 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
       const page = await getCopyPage(db, editor, id);
       if (!page) return notOpen(id);
       const result = await check(page, page.body);
-      await logPageChecks(db, editor, id, result.checks, RULES_VERSION);
+      await logPageChecks(db, page, result.checks, RULES_VERSION);
       const duplicateOf = await findDuplicates(db, id, page.body);
       const summary = failureLines(page, result);
       if (duplicateOf.length) {
@@ -235,7 +235,7 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
       }
 
       const recommended = { outcome, ...(target ? { target } : {}), reason };
-      const status = STATUS_LABELS[await recordOutcome(db, editor, id, recommended)];
+      const status = STATUS_LABELS[await recordOutcome(db, saved, recommended)];
       return {
         content: [{ type: "text", text: `Stored for page ${id}: ${outcomeText(recommended)}. Its status is now "${status}".` }],
         structuredContent: { page: id, outcome: recommended, status },
@@ -273,9 +273,8 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
     },
     async ({ page: id, changes }): Promise<CallToolResult> => {
       // One transaction, with the page locked, so a second call on the same page waits its turn.
-      return db.transaction(async (tx) => {
-        await lockPage(tx, editor, id);
-        const saved = await getCopyPage(tx, editor, id);
+      return db.begin(async (tx) => {
+        const saved = await getCopyPage(tx, editor, id, { lock: true });
         if (!saved) return notOpen(id);
         if (saved.status.startsWith("approved_")) return error(`The editor has already decided page ${id}.`);
         if (saved.outcome?.outcome !== "migrate") {
@@ -289,7 +288,7 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
         const text = saved.body;
         const failing = (await check(saved, text)).failures.map((f) => f.ruleId);
         const tries = new Map<string, number>();
-        for (const c of await getChanges(tx, editor, id)) if (c.kind === "fix") tries.set(c.ruleId!, (tries.get(c.ruleId!) ?? 0) + 1);
+        for (const c of await getChanges(tx, saved)) if (c.kind === "fix") tries.set(c.ruleId!, (tries.get(c.ruleId!) ?? 0) + 1);
 
         const report: string[] = [];
         for (const { kind, ruleId, original, proposed, reason } of changes) {
@@ -303,7 +302,7 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
               report.push(`${label}: refused, say why it can't be fixed.`);
               continue;
             }
-            await recordChange(tx, editor, id, { kind, ruleId, reason }, [], RULES_VERSION);
+            await recordChange(tx, saved, { kind, ruleId, reason }, [], RULES_VERSION);
             report.push(`${label}: stored. The page needs a manual fix.`);
             continue;
           }
@@ -321,13 +320,13 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
           const checks = (await check(saved, text.split(original).join(proposed))).checks.filter(
             (c) => c.ruleId === ruleId || !failing.includes(c.ruleId),
           );
-          await recordChange(tx, editor, id, { kind, ruleId, attempt, original, proposed, reason }, checks, RULES_VERSION);
+          await recordChange(tx, saved, { kind, ruleId, attempt, original, proposed, reason }, checks, RULES_VERSION);
           const broken = checks.filter((c) => !c.passed).map((c) => c.reason);
           report.push(broken.length ? `${label}: failed the rules, not shown to the editor. ${broken.join(" ")}` : `${label}: passed.`);
         }
 
-        const status = statusAfterChanges(failing, await getChanges(tx, editor, id));
-        await setStatus(tx, editor, id, status);
+        const status = statusAfterChanges(failing, await getChanges(tx, saved));
+        await setStatus(tx, saved, status);
         report.push(`Page ${id} is now "${STATUS_LABELS[status]}".`);
         return { content: [{ type: "text", text: report.join("\n") }] };
       });
@@ -348,12 +347,11 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
     },
     async ({ page: id, decision }): Promise<CallToolResult> => {
       // One transaction, with the page locked, so a second call on the same page waits its turn.
-      return db.transaction(async (tx) => {
-        await lockPage(tx, editor, id);
-        const saved = await getCopyPage(tx, editor, id);
+      return db.begin(async (tx) => {
+        const saved = await getCopyPage(tx, editor, id, { lock: true });
         if (!saved) return notOpen(id);
         if (saved.status.startsWith("approved_")) return error(`Page ${id} is already decided.`);
-        const changes = await getChanges(tx, editor, id);
+        const changes = await getChanges(tx, saved);
         const text = workingText(saved, changes);
         const { action, note } = decision;
 
@@ -363,29 +361,29 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
             const change = changes.find((c) => c.id === decision.changeId && c.passed && c.kind !== "cannot_fix");
             if (!change) return error("There is no such change on this page.");
             if (action === "accept" && text.split(change.original!).length !== 2) return error("This change no longer fits the page text.");
-            await recordDecision(tx, editor, id, { action, proposalId: change.id, note }, {}, [], RULES_VERSION);
+            await recordDecision(tx, saved, { action, proposalId: change.id, note }, {}, [], RULES_VERSION);
             break;
           }
           case "save": {
             if (text === saved.body) return error("There are no changes to save.");
             const record = { action, originalText: saved.body, finalText: text, note };
-            await recordDecision(tx, editor, id, record, { body: text }, (await check(saved, text)).checks, RULES_VERSION);
+            await recordDecision(tx, saved, record, { body: text }, (await check(saved, text)).checks, RULES_VERSION);
             break;
           }
           case "migrate": {
             if (text !== saved.body) return error("Save your changes first.");
             const { checks, failures } = await check(saved, saved.body);
             if (failures.length) return error("A page can migrate only when every rule passes.");
-            await recordDecision(tx, editor, id, { action, note }, { status: "approved_migrate" }, checks, RULES_VERSION);
+            await recordDecision(tx, saved, { action, note }, { status: "approved_migrate" }, checks, RULES_VERSION);
             break;
           }
           case "retire":
-            await recordDecision(tx, editor, id, { action, note }, { status: "approved_retire" }, [], RULES_VERSION);
+            await recordDecision(tx, saved, { action, note }, { status: "approved_retire" }, [], RULES_VERSION);
             break;
           case "redirect": {
             const { target } = decision;
             if (target === id || !(await getCopyPage(tx, editor, target))) return error("A redirect needs a target: another page in the batch.");
-            await recordDecision(tx, editor, id, { action, targetPageId: target, note }, { status: "approved_redirect" }, [], RULES_VERSION);
+            await recordDecision(tx, saved, { action, targetPageId: target, note }, { status: "approved_redirect" }, [], RULES_VERSION);
             break;
           }
         }
@@ -422,7 +420,7 @@ export function createServer({ db, editor = LOCAL_EDITOR }: ServerOptions): McpS
       const saved = await getCopyPage(db, editor, id);
       if (!saved) return notOpen(id);
       const { title, type, status, body, outcome } = saved;
-      const stored = await getChanges(db, editor, id);
+      const stored = await getChanges(db, saved);
       const text = workingText(saved, stored);
       const { rulesChecked, failures } = await check(saved, body);
       const changes = stored
