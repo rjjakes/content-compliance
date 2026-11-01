@@ -1,0 +1,65 @@
+# AI guidelines: how the AI writes when it suggests changes.
+# The guidelines are explained in docs/CONTENT.md, "AI guidelines",
+# which has the same list in the same words.
+#
+# They guide the AI's fixes and content uplift. They never fail a page:
+# only the fixed rules (config/rules.yml) do that.
+# Another organisation can change, add or remove guidelines without changing code.
+
+guidelines:
+  # Plain English and voice (NHS content guide)
+
+  - id: plain-english
+    guideline: 'Plain English, with short, common words: "have" rather than "experience".'
+    source: NHS content guide
+
+  - id: short-sentences
+    guideline: Sentences of up to 20 words where possible.
+    source: NHS content guide
+
+  - id: plain-term-first
+    guideline: 'The plain term first, then the medical term, for example "piles (haemorrhoids)".'
+    source: NHS content guide
+
+  - id: abbreviations-spelled-out
+    guideline: Abbreviations spelled out on first use, unless well known, like NHS or GP.
+    source: NHS content guide
+
+  - id: active-voice
+    guideline: 'Active voice. Speak to the reader as "you" and avoid "should".'
+    source: NHS content guide
+
+  - id: calm-factual-voice
+    guideline: 'A neutral, factual, calm and reassuring voice: "talk to your doctor about…".'
+    source: NHS content guide
+
+  # Structure (NHS content guide)
+
+  - id: key-point-first
+    guideline: The key point first. Short paragraphs, subheadings, and bulleted lists of up to 6 items.
+    source: NHS content guide
+
+  - id: no-bold-or-italics
+    guideline: No bold for emphasis, no italics.
+    source: NHS content guide
+
+  # Medicines and claims (ABPI Code)
+
+  - id: balanced-about-medicines
+    guideline: Factual and balanced about medicines. Nothing that reads as advertising a prescription medicine, raises unfounded hopes, or encourages people to ask for a specific medicine.
+    source: ABPI Code, clauses 26.1 and 26.2
+
+  - id: comparisons-say-against-what
+    guideline: 'Comparisons say what they compare against: "better than what?"'
+    source: ABPI Code, clause 6.1
+
+  # Headings and alt text (WCAG 2.2)
+
+  - id: descriptive-headings-and-alt-text
+    guideline: Headings and alt text that describe the content, not just exist.
+    source: WCAG 2.2, 2.4.6 and 1.1.1
+
+  # Audience. Ours: no outside source.
+
+  - id: written-for-audience
+    guideline: "Written for the page's audience: plain English for patients, clinical terms allowed on pages for healthcare professionals."

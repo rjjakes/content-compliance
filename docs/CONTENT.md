@@ -43,7 +43,7 @@ Machine checks whose results inform the AI's recommendation (migrate, retire or 
 - **Redirect target:** when the AI recommends a redirect, the target page exists.
 
 ## AI guidelines
-For content uplift: bringing each page up to date and in line with the standards. These guide the AI's suggestions and never fail a page.
+For content uplift: bringing each page up to date and in line with the standards. These guide the AI's suggestions and never fail a page. The same list, in the same words, is in `config/guidelines.yml`.
 - Plain English, with short, common words: "have" rather than "experience" (NHS).
 - Sentences of up to 20 words where possible (NHS).
 - The plain term first, then the medical term, for example "piles (haemorrhoids)" (NHS).
