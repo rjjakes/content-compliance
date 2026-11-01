@@ -38,7 +38,7 @@ Tagline: **AI proposes, people decide.**
 ## Further reading
 - `docs/spec.md`: what the app does.
 - `docs/CONTENT.md`: the sample content, fixed rules, AI guidelines and demo cases.
-- `docs/case-studies.md`: published examples of the real-world problem.
+- `private/case-studies.md` (git-ignored, local only): published examples of the real-world problem.
 - `db/schema.sql`: the database tables.
 
 ## Reference code
